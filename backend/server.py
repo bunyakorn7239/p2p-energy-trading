@@ -108,8 +108,11 @@ def run_case(
     """
     mode = "BASE"       – every bus uses ACTUAL_LOAD_DATA; no DG
     mode = "PRE_MATCH"  – sellers inject at full capacity; no loads anywhere
-    mode = "POST_MATCH" – sellers inject sold_kwh; buyer load = unmet demand;
-                          other buses use ACTUAL_LOAD_DATA
+    mode = "POST_MATCH" – buyers keep their full ACTUAL_LOAD_DATA load (they still
+                          consume the same amount; the trade only changes the
+                          source from grid to peer PV). Sellers place no load and
+                          inject their sold surplus (sold_kwh) as sgen. Other buses
+                          keep their ACTUAL_LOAD_DATA load.
     """
     net = create_network()
 
@@ -131,17 +134,19 @@ def run_case(
 
         elif mode == "POST_MATCH":
             if bidx in seller_bus:
-                pass  # Seller bus: no actual load, only sgen below
+                pass  # Seller bus: the seller's PV covers its own load and only
+                      # the surplus is exported, so the surplus is injected as
+                      # sgen below and no load is placed here.
 
             elif bidx in buyer_bus:
-                buyer       = buyer_bus[bidx]
-                demand_mw   = kwh_to_mw((buyer_energy_kwh or {})[buyer])
-                bought_mw   = kwh_to_mw((buyer_bought_kwh or {}).get(buyer, 0.0))
-                unmet_mw    = max(0.0, demand_mw - bought_mw)
-                if unmet_mw > 1e-9:
-                    pp.create_load(net, bus=bidx, p_mw=unmet_mw, q_mvar=0.0,
-                                   name=f"Load_Buyer{buyer}")
-                    total_buyer_load += unmet_mw
+                # The buyer still consumes its full actual load. P2P trading only
+                # changes where that energy comes from (a peer's PV instead of the
+                # grid), not how much the buyer uses, so the load must remain in
+                # the power flow for the BASE and POST_MATCH cases to be comparable.
+                buyer = buyer_bus[bidx]
+                pp.create_load(net, bus=bidx, p_mw=orig_p, q_mvar=orig_q,
+                               name=f"Load_Buyer{buyer}")
+                total_buyer_load += orig_p
             else:
                 # Other buses (not a player): use actual measured load
                 pp.create_load(net, bus=bidx, p_mw=orig_p, q_mvar=orig_q,
