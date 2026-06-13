@@ -74,7 +74,7 @@ LINE_DATA = [
 R_OHM_PER_KM = 0.3415404
 X_OHM_PER_KM = 0.4257663
 C_NF_PER_KM  = 10.89339
-MAX_I_KA     = 0.34
+MAX_I_KA     = 0.34 / 3 # = 0.11333 kA
 
 
 def create_network() -> pp.pandapowerNet:

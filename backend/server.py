@@ -113,6 +113,12 @@ def run_case(
                           source from grid to peer PV). Sellers place no load and
                           inject their sold surplus (sold_kwh) as sgen. Other buses
                           keep their ACTUAL_LOAD_DATA load.
+    mode = "BUYER_TEST" – mirror of PRE_MATCH for the buyer side: place a variable
+                          load (buyer_energy_kwh) at each buyer bus, with no other
+                          loads and no DG, then scale it up to find the
+                          under-voltage limit. Used only by /api/energy_range so
+                          the buyer feasible range responds to demand, since the
+                          POST_MATCH buyer load is fixed to ACTUAL_LOAD_DATA.
     """
     net = create_network()
 
@@ -131,6 +137,18 @@ def run_case(
 
         elif mode == "PRE_MATCH":
             pass  # No loads anywhere — only DG sgen below
+
+        elif mode == "BUYER_TEST":
+            # Mirror of PRE_MATCH for the buyer side: a variable load is placed at
+            # each buyer bus (no other loads, and no DG below) and scaled up to
+            # find the under-voltage limit. Used only by /api/energy_range.
+            if bidx in buyer_bus:
+                b = buyer_bus[bidx]
+                p_mw = kwh_to_mw((buyer_energy_kwh or {}).get(b, 0.0))
+                if p_mw > 1e-12:
+                    pp.create_load(net, bus=bidx, p_mw=p_mw, q_mvar=0.0,
+                                   name=f"LoadTest_Buyer{b}")
+                    total_buyer_load += p_mw
 
         elif mode == "POST_MATCH":
             if bidx in seller_bus:
@@ -314,11 +332,13 @@ def health():
 
 # ---------------------------------------------------------------------------
 # /api/energy_range  –  binary-search max feasible injection per seller
+#                       and max feasible withdrawal per buyer
 # ---------------------------------------------------------------------------
 @app.route("/api/energy_range", methods=["POST"])
 def energy_range():
     data = request.json or {}
-    sellers          = data.get("sellers", SELLERS)
+    sellers = data.get("sellers", SELLERS)
+    buyers = data.get("buyers", BUYERS)
     player_locations = data.get("player_locations", PLAYER_LOCATIONS)
     n = len(sellers)
     if n == 0:
@@ -339,11 +359,15 @@ def energy_range():
 
     def test_buyer_total(total_kwh: float) -> bool:
         n_b = len(buyers)
+        if n_b == 0:
+            return False
         per = total_kwh / n_b
         try:
-            res = run_case("POST_MATCH", [], buyers, player_locations,
-                           buyer_energy_kwh={b: per for b in buyers},
-                           buyer_bought_kwh={})
+            # Use the dedicated BUYER_TEST mode: it places a variable load at each
+            # buyer bus so the search can find the under-voltage limit. (POST_MATCH
+            # fixes buyer load to ACTUAL_LOAD_DATA, so it cannot be used here.)
+            res = run_case("BUYER_TEST", [], buyers, player_locations,
+                           buyer_energy_kwh={b: per for b in buyers})
             if not res.get("converged"):
                 return False
             v = res.get("violations", {})
@@ -352,7 +376,7 @@ def energy_range():
             return False
 
     UPPER = 30_000.0
-    
+
     # --- Sellers Binary Search ---
     lo_s, hi_s = 0.0, UPPER
     for _ in range(40):

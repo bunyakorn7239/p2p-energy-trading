@@ -5,7 +5,7 @@
  *   BASE       : ACTUAL_LOAD_DATA at every bus, no DG
  *   PRE_MATCH  : Seller sgen at FULL SELLER_ENERGY_KWH, NO loads anywhere
  *   POST_MATCH : Seller sgen = sold_kwh only (no actual load for seller buses)
- *                Buyer load  = unmet demand (demand - bought), no actual load
+ *                Buyer load = full ACTUAL_LOAD_DATA (P2P changes source only)
  *                Other buses = ACTUAL_LOAD_DATA
  *
  * Network: IEEE 33-bus, 22kV/0.4kV transformer (Bus 0 HV → Bus 1 LV slack)
@@ -15,10 +15,10 @@
 "use strict";
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const V_NOM_HV  = 22.0;   // kV  (Bus 0)
-const V_NOM_LV  = 0.4;    // kV  (Bus 1-35)
-const V_MIN     = 0.95;   // p.u.
-const V_MAX     = 1.05;   // p.u.
+const V_NOM_HV = 22.0;   // kV  (Bus 0)
+const V_NOM_LV = 0.4;    // kV  (Bus 1-35)
+const V_MIN = 0.95;   // p.u.
+const V_MAX = 1.05;   // p.u.
 const KWH_TO_MW = kwh => kwh / 24.0 / 1000.0;
 
 /**
@@ -27,40 +27,40 @@ const KWH_TO_MW = kwh => kwh / 24.0 / 1000.0;
  */
 const LINE_DATA = [
   // Main feeder
-  [1,  2,  0.04, 0.3415404, 0.4257663, 0.34],
-  [2,  6,  0.04, 0.3415404, 0.4257663, 0.34],
-  [2,  3,  0.04, 0.3415404, 0.4257663, 0.34],
-  [3,  11, 0.02, 0.3415404, 0.4257663, 0.34],
-  [3,  4,  0.04, 0.3415404, 0.4257663, 0.34],
-  [4,  14, 0.02, 0.3415404, 0.4257663, 0.34],
-  [4,  17, 0.02, 0.3415404, 0.4257663, 0.34],
-  [4,  5,  0.04, 0.3415404, 0.4257663, 0.34],
-  [5,  20, 0.04, 0.3415404, 0.4257663, 0.34],
-  [6,  7,  0.04, 0.3415404, 0.4257663, 0.34],
-  [7,  28, 0.02, 0.3415404, 0.4257663, 0.34],
-  [7,  8,  0.04, 0.3415404, 0.4257663, 0.34],
-  [8,  30, 0.02, 0.3415404, 0.4257663, 0.34],
-  [8,  32, 0.02, 0.3415404, 0.4257663, 0.34],
-  [8,  9,  0.04, 0.3415404, 0.4257663, 0.34],
-  [9,  34, 0.02, 0.3415404, 0.4257663, 0.34],
-  [9,  10, 0.04, 0.3415404, 0.4257663, 0.34],
-  [10, 25, 0.04, 0.3415404, 0.4257663, 0.34],
-  [10, 26, 0.04, 0.3415404, 0.4257663, 0.34],
-  [11, 12, 0.02, 0.3415404, 0.4257663, 0.34],
-  [12, 13, 0.02, 0.3415404, 0.4257663, 0.34],
-  [14, 15, 0.02, 0.3415404, 0.4257663, 0.34],
-  [15, 16, 0.02, 0.3415404, 0.4257663, 0.34],
-  [17, 18, 0.02, 0.3415404, 0.4257663, 0.34],
-  [18, 19, 0.02, 0.3415404, 0.4257663, 0.34],
-  [20, 21, 0.02, 0.3415404, 0.4257663, 0.34],
-  [21, 22, 0.02, 0.3415404, 0.4257663, 0.34],
-  [23, 24, 0.02, 0.3415404, 0.4257663, 0.34],
-  [24, 25, 0.02, 0.3415404, 0.4257663, 0.34],
-  [26, 27, 0.02, 0.3415404, 0.4257663, 0.34],
-  [28, 29, 0.02, 0.3415404, 0.4257663, 0.34],
-  [30, 31, 0.02, 0.3415404, 0.4257663, 0.34],
-  [32, 33, 0.02, 0.3415404, 0.4257663, 0.34],
-  [34, 35, 0.02, 0.3415404, 0.4257663, 0.34],
+  [1, 2, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [2, 6, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [2, 3, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [3, 11, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [3, 4, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [4, 14, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [4, 17, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [4, 5, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [5, 20, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [6, 7, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [7, 28, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [7, 8, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [8, 30, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [8, 32, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [8, 9, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [9, 34, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [9, 10, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [10, 25, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [10, 26, 0.04, 0.3415404, 0.4257663, 0.11333],
+  [11, 12, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [12, 13, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [14, 15, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [15, 16, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [17, 18, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [18, 19, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [20, 21, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [21, 22, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [23, 24, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [24, 25, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [26, 27, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [28, 29, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [30, 31, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [32, 33, 0.02, 0.3415404, 0.4257663, 0.11333],
+  [34, 35, 0.02, 0.3415404, 0.4257663, 0.11333],
 ];
 
 // ── Network tree structure ─────────────────────────────────────────────────
@@ -187,18 +187,18 @@ function runSimplifiedPowerFlow(busLoad) {
     const pFrom_mw = Pbr[key] || 0;  // Active power at sending end (MW)
     const qFrom_mvar = Qbr[key] || 0; // Reactive power at sending end (MVAR)
     const vFrom_kv = vm[f] * V_NOM_LV;
-    const vTo_kv   = vm[t] * V_NOM_LV;
+    const vTo_kv = vm[t] * V_NOM_LV;
 
     // Sending-end current (kA)
     const sMva = Math.sqrt(pFrom_mw * pFrom_mw + qFrom_mvar * qFrom_mvar);
     const iFrom_ka = sMva / (Math.sqrt(3) * Math.max(vFrom_kv, 0.001));
 
     // Line losses: P_loss = I²·R·L,  Q_loss = I²·X·L
-    const pl_mw   = iFrom_ka * iFrom_ka * r * L;
+    const pl_mw = iFrom_ka * iFrom_ka * r * L;
     const ql_mvar = iFrom_ka * iFrom_ka * x * L;
 
     // Receiving-end power and current
-    const pTo_mw   = pFrom_mw - pl_mw;
+    const pTo_mw = pFrom_mw - pl_mw;
     const qTo_mvar = qFrom_mvar - ql_mvar;
     const sTo = Math.sqrt(pTo_mw * pTo_mw + qTo_mvar * qTo_mvar);
     const iTo_ka = sTo / (Math.sqrt(3) * Math.max(vTo_kv, 0.001));
@@ -209,8 +209,8 @@ function runSimplifiedPowerFlow(busLoad) {
       lineIdx: idx,
       from: f, to: t, L,
       rOhmPerKm: r, xOhmPerKm: x, maxIKa: maxI,
-      iFromKa: iFrom_ka,  iToKa: iTo_ka,
-      pFromMw: pFrom_mw,  pToMw: pTo_mw,
+      iFromKa: iFrom_ka, iToKa: iTo_ka,
+      pFromMw: pFrom_mw, pToMw: pTo_mw,
       qFromMvar: qFrom_mvar, qToMvar: qTo_mvar,
       plMw: pl_mw, qlMvar: ql_mvar,
       loading,
@@ -218,7 +218,7 @@ function runSimplifiedPowerFlow(busLoad) {
   });
 
   // ── System totals
-  const totalLineLossMw   = lineResults.reduce((s, l) => s + l.plMw, 0);
+  const totalLineLossMw = lineResults.reduce((s, l) => s + l.plMw, 0);
   const totalLineLossMvar = lineResults.reduce((s, l) => s + l.qlMvar, 0);
 
   // Total load consumed (MW) = sum of positive pMw entries
@@ -302,7 +302,7 @@ function buildPreMatchCase(sellerEnergyKwh, playerLocations, sellers) {
 /**
  * POST_MATCH CASE:
  *   Seller bus : no actual load; sgen = sold_kwh  (net pMw = -soldMw)
- *   Buyer bus  : unmet demand = (demand - bought) as load (pMw = unmetMw, qMvar = 0)
+ *   Buyer load = full ACTUAL_LOAD_DATA (P2P changes source only)
  *   Other bus  : ACTUAL_LOAD_DATA (pMw, qMvar as measured)
  *
  * Python: mode="POST_MATCH"
@@ -317,7 +317,7 @@ function buildPostMatchCase(
 ) {
   // Build bus→player maps
   const sellerBusMap = {};  // { busNum: sellerName }
-  const buyerBusMap  = {};  // { busNum: buyerName  }
+  const buyerBusMap = {};  // { busNum: buyerName  }
   for (const s of sellers) {
     sellerBusMap[parseInt(playerLocations[s].replace("Bus", ""), 10)] = s;
   }
@@ -340,15 +340,9 @@ function buildPostMatchCase(
       totalDgMw += soldMw;
 
     } else if (buyerBusMap[busNum] !== undefined) {
-      // ── Buyer bus: unmet demand as load (no actual load from ACTUAL_LOAD_DATA)
-      const b = buyerBusMap[busNum];
-      const demandMw = KWH_TO_MW(buyerEnergyKwh[b]);
-      const boughtMw = KWH_TO_MW(boughtKwh[b] || 0);
-      const unmetMw  = Math.max(0, demandMw - boughtMw);
-      if (unmetMw > 1e-9) {
-        busLoad[busNum] = { pMw: unmetMw, qMvar: 0.0 };
-        totalBuyerLoadMw += unmetMw;
-      }
+      // ── Buyer bus: keep FULL actual load (P2P เปลี่ยนแค่แหล่งที่มา ไม่ใช่ปริมาณที่กิน)
+      busLoad[busNum] = { pMw: val.pMw, qMvar: val.qMvar };
+      totalBuyerLoadMw += val.pMw;
 
     } else {
       // ── Other bus: use ACTUAL_LOAD_DATA as-is
@@ -362,16 +356,16 @@ function buildPostMatchCase(
 // ── Compute full metrics dict (matches Python print_metrics) ──────────────
 function computeMetrics(pfResult, totalDgMw, totalBuyerLoadMw) {
   return {
-    min_voltage_pu:       pfResult.minVmPu,
-    max_voltage_pu:       pfResult.maxVmPu,
-    total_loss_mw:        pfResult.totalLineLossMw,
-    grid_supply_mw:       pfResult.gridSupplyMw,
+    min_voltage_pu: pfResult.minVmPu,
+    max_voltage_pu: pfResult.maxVmPu,
+    total_loss_mw: pfResult.totalLineLossMw,
+    grid_supply_mw: pfResult.gridSupplyMw,
     max_line_loading_pct: pfResult.maxLoading,
-    total_dg_mw:          totalDgMw,
-    total_buyer_load_mw:  totalBuyerLoadMw,
-    total_load_mw:        pfResult.totalLoadMw,
-    total_sgen_mw:        pfResult.totalSgenMw,
-    total_loss_mvar:      pfResult.totalLineLossMvar,
+    total_dg_mw: totalDgMw,
+    total_buyer_load_mw: totalBuyerLoadMw,
+    total_load_mw: pfResult.totalLoadMw,
+    total_sgen_mw: pfResult.totalSgenMw,
+    total_loss_mvar: pfResult.totalLineLossMvar,
   };
 }
 
