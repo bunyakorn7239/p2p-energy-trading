@@ -12,8 +12,8 @@
 "use strict";
 
 // ── Config ─────────────────────────────────────────────────────────────────
-const BACKEND = (window.location.protocol === "file:" || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
-  ? "http://localhost:5001" 
+const BACKEND = (window.location.protocol === "file:" || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ? "http://localhost:5001"
   : ""; // When deployed, API paths are relative to the origin
 
 const FIT_PRICE = 2.20;
@@ -330,7 +330,7 @@ function renderEnergyRangeBanner() {
   if (!el) return;
   const er = wf.energyRange;
   if (!er) { el.innerHTML = `<div class="era-loading">⏳ Loading energy range from backend…</div>`; return; }
-  
+
   const maxS = er.max_kwh_per_seller !== undefined ? er.max_kwh_per_seller.toLocaleString() : "—";
   const maxSTot = er.max_kwh_total_seller !== undefined ? er.max_kwh_total_seller.toLocaleString() : "—";
   const maxB = er.max_kwh_per_buyer !== undefined ? er.max_kwh_per_buyer.toLocaleString() : "—";
@@ -1229,7 +1229,7 @@ function renderCaseDetail(pf, label, accentClass) {
           <div class="pf-sys-stat"><span>Line Losses</span><strong>${f6((m.line_loss_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Trafo Losses</span><strong>${f6((m.trafo_loss_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Total Losses</span><strong>${f6((m.total_loss_mw || 0) * 1000)} kW (${f4(loss_pct)} %)</strong></div>
-          <div class="pf-sys-stat"><span>Max Line Loading</span><strong>${f6(m.max_line_loading_pct || 0)} %</strong></div>
+          <div class="pf-sys-stat"><span>Max Line Loading</span><strong style="${(m.max_line_loading_pct || 0) > 100 ? "color:#ef4444" : ""}">${f6(m.max_line_loading_pct || 0)} %${(m.max_line_loading_pct || 0) > 100 ? " ⚠️" : ""}</strong></div>
           <div class="pf-sys-stat"><span>Total DG Injection</span><strong>${f8(m.total_dg_mw || 0)} MW</strong></div>
           <div class="pf-sys-stat"><span>Total Buyer Load</span><strong>${f8(m.total_buyer_load_mw || 0)} MW</strong></div>
           <div class="pf-sys-stat"><span>Reactive Losses</span><strong>${f6((m.total_loss_mvar || 0) * 1000)} kVAR</strong></div>
@@ -1269,6 +1269,11 @@ function renderCaseDetail(pf, label, accentClass) {
 
       <!-- 3. Line Loading (matches Python display_line_loading) -->
       <h4 class="pf-sub-title" style="margin-top:20px">3. Line Loading — Loading% = (I_actual / I_max_thermal) × 100</h4>
+      ${(m.max_line_loading_pct || 0) > 100 ? `
+        <div class="wf-alert alert-grid" style="margin:8px 0">
+          <div class="wf-alert-title">🔥 THERMAL LIMIT EXCEEDED — ระบบเกิด overload เกินขีดจำกัดความร้อนที่สายส่งรับได้</div>
+          <div>Max Line Loading = ${f6(m.max_line_loading_pct)} % (เกิน 100%). กระแสในบางช่วงสายเกิน I_max_thermal สายส่งมีความเสี่ยง overheating การจับคู่/การฉีดกำลังในรอบนี้ไม่ผ่าน thermal constraint</div>
+        </div>` : ""}
       <div class="table-scroll"><table class="data-table">
         <thead><tr><th>Line#</th><th>From</th><th>To</th>
           <th>I_actual (kA)</th><th>I_max (kA)</th><th>Loading (%)</th><th>Status</th></tr></thead>
