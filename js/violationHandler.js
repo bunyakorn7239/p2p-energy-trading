@@ -3,6 +3,7 @@ function handlePowerFlowViolations(pf) {
   const violations = [
     ...(pf.post_match?.violations?.under || []),
     ...(pf.post_match?.violations?.over || []),
+    ...(pf.post_match?.violations?.thermal || []),
   ];
   wf.pfViolations = violations;
 

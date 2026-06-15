@@ -40,6 +40,7 @@ def serve_index():
 
 V_MIN               = 0.95
 V_MAX               = 1.05
+MAX_LINE_LOADING    = 100.0   # % thermal limit ต่อสาย (ตั้ง 80 ได้ถ้าต้องการ margin)
 ENERGY_WINDOW_HOURS = 24.0
 FIT_PRICE           = 2.20
 RETAIL_PRICE        = 5.80
@@ -290,6 +291,11 @@ def run_case(
          "excess": round(v["vm_pu"] - V_MAX, 6)}
         for v in lv_buses if v["vm_pu"] > V_MAX
     ]
+    violations_thermal = [
+        {"line": l["lineIdx"], "from": l["from"], "to": l["to"],
+         "loading": l["loading"], "excess": round(l["loading"] - MAX_LINE_LOADING, 4)}
+        for l in line_results if l["loading"] > MAX_LINE_LOADING
+    ]
 
     return {
         "converged":    True,
@@ -312,8 +318,9 @@ def run_case(
             "loss_pct":             round(loss_pct, 4),
         },
         "violations": {
-            "under": violations_under,
-            "over":  violations_over,
+            "under":   violations_under,
+            "over":    violations_over,
+            "thermal": violations_thermal,
         },
         "totalDgMw":         round(total_dg_mw, 8),
         "totalBuyerLoadMw":  round(total_buyer_load, 8),
@@ -353,7 +360,8 @@ def energy_range():
             if not res.get("converged"):
                 return False
             v = res.get("violations", {})
-            return len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
+            return (len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
+                    and len(v.get("thermal", [])) == 0)
         except Exception:
             return False
 
@@ -371,7 +379,8 @@ def energy_range():
             if not res.get("converged"):
                 return False
             v = res.get("violations", {})
-            return len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
+            return (len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
+                    and len(v.get("thermal", [])) == 0)
         except Exception:
             return False
 
