@@ -41,7 +41,7 @@ def serve_index():
 V_MIN               = 0.95
 V_MAX               = 1.05
 MAX_LINE_LOADING    = 100.0   # % thermal limit ต่อสาย (ตั้ง 80 ได้ถ้าต้องการ margin)
-ENERGY_WINDOW_HOURS = 24.0
+ENERGY_WINDOW_HOURS = 1.0
 FIT_PRICE           = 2.20
 RETAIL_PRICE        = 5.80
 
@@ -73,10 +73,10 @@ DEFAULT_BIDDING_PRICE: Dict[str, float] = {
     "A": 4.7114, "B": 5.3546, "G": 5.0999, "H": 3.8625, "J": 5.80,
 }
 DEFAULT_SELLER_ENERGY: Dict[str, float] = {
-    "C": 26.0, "D": 22.0, "E": 39.0, "F": 29.0, "I": 17.0,
+    "C": 12.0, "D": 10.0, "E": 13.0, "F": 9.0, "I": 11.0,
 }
 DEFAULT_BUYER_ENERGY: Dict[str, float] = {
-    "A": 40.0, "B":  9.0, "G": 14.0, "H": 33.0, "J": 44.0,
+    "A": 11.0, "B": 8.0, "G": 9.0, "H": 12.0, "J": 10.0,
 }
 
 
@@ -412,7 +412,8 @@ def energy_range():
         "min_kwh_per_seller": 0,
         "min_kwh_per_buyer": 0,
         "feasibility_note": (
-            f"Binary-search result (voltage ∈ [{V_MIN}, {V_MAX}] p.u.)"
+            f"Per-slot (1h) limit. Binding: line loading <= {MAX_LINE_LOADING}% "
+            f"(thermal, ชนก่อน) and voltage in [{V_MIN}, {V_MAX}] p.u."
         ),
     })
 
@@ -525,6 +526,11 @@ def analyze():
 # Entry point
 # =============================================================================
 if __name__ == "__main__":
+    # ลงทะเบียน market routes (วางในนี้ หลัง app และทุกอย่างถูกนิยามครบแล้ว)
+    from market import register_market_routes
+    register_market_routes(app)
+
+
     print("=" * 60)
     print("  P2P Energy Trading Backend  (pandapower AC power flow)")
     print(f"  pandapower version : {pp.__version__}")
