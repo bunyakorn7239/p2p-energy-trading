@@ -73,10 +73,10 @@ DEFAULT_BIDDING_PRICE: Dict[str, float] = {
     "A": 4.7114, "B": 5.3546, "G": 5.0999, "H": 3.8625, "J": 5.80,
 }
 DEFAULT_SELLER_ENERGY: Dict[str, float] = {
-    "C": 12.0, "D": 10.0, "E": 13.0, "F": 9.0, "I": 11.0,
+    "C": 3.10, "D": 2.90, "E": 3.10, "F": 2.90, "I": 3.00,
 }
 DEFAULT_BUYER_ENERGY: Dict[str, float] = {
-    "A": 11.0, "B": 8.0, "G": 9.0, "H": 12.0, "J": 10.0,
+    "A": 3.10, "B": 2.90, "G": 3.10, "H": 2.90, "J": 3.00,
 }
 
 
