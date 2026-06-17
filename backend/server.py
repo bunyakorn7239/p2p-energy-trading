@@ -404,16 +404,35 @@ def energy_range():
         else:
             hi_b = mid
 
+    # ── Operating cap: inject รวม <= load (ไม่เกิด reverse flow -> POST_MATCH < BASE) ──
+    # ENERGY_WINDOW_HOURS = 1.0 => kWh ที่กรอก = kW ที่ inject ใน snapshot 1 ชม.
+    # PV ที่พื้นที่ดูดซับได้โดยไม่ส่งออกกริด ถูกจำกัดด้วยโหลดที่เหลือใน POST_MATCH
+    # คือโหลดบัส buyer (โหลดบัส seller ถือว่า PV เลี้ยงตัวเองหมดแล้ว). การ cap พลังงาน
+    # แนะนำที่ค่านี้ ทำให้การศึกษาอยู่ใน grid-relief regime แทน reverse-flow regime.
+    op_total = sum(
+        ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]), (0.0, 0.0))[0]
+        for b in buyers
+    ) * 1000.0  # kW (== kWh ต่อ slot 1 ชม.)
+
+    cap_total_seller = min(lo_s, op_total)
+    cap_total_buyer  = min(lo_b, op_total)
+    n_b = len(buyers)
+
     return jsonify({
-        "max_kwh_per_seller": int(lo_s / n),
-        "max_kwh_total_seller": int(lo_s),
-        "max_kwh_per_buyer": int(lo_b / len(buyers)) if len(buyers) > 0 else 0,
-        "max_kwh_total_buyer": int(lo_b),
+        "max_kwh_per_seller":   round(cap_total_seller / n, 2),
+        "max_kwh_total_seller": round(cap_total_seller, 2),
+        "max_kwh_per_buyer":    round(cap_total_buyer / n_b, 2) if n_b > 0 else 0,
+        "max_kwh_total_buyer":  round(cap_total_buyer, 2),
+        "thermal_max_total_seller": round(lo_s, 2),   # เพดาน thermal เดิม (อ้างอิง)
+        "thermal_max_total_buyer":  round(lo_b, 2),
+        "load_cap_total":           round(op_total, 2),
         "min_kwh_per_seller": 0,
         "min_kwh_per_buyer": 0,
         "feasibility_note": (
-            f"Per-slot (1h) limit. Binding: line loading <= {MAX_LINE_LOADING}% "
-            f"(thermal, ชนก่อน) and voltage in [{V_MIN}, {V_MAX}] p.u."
+            f"Operating cap (window=1): inject รวม <= โหลด buyer {op_total:.2f} kW "
+            f"เพื่อเลี่ยง reverse flow ให้ POST_MATCH < BASE. "
+            f"เพดาน thermal/voltage ({MAX_LINE_LOADING}%, [{V_MIN},{V_MAX}] p.u.) "
+            f"= seller {lo_s:.1f}, buyer {lo_b:.1f} kWh (เป็นเพดานแข็งอีกชั้น)."
         ),
     })
 
@@ -526,7 +545,6 @@ def analyze():
 # Entry point
 # =============================================================================
 if __name__ == "__main__":
-    # ลงทะเบียน market routes (วางในนี้ หลัง app และทุกอย่างถูกนิยามครบแล้ว)
     from market import register_market_routes
     register_market_routes(app)
 

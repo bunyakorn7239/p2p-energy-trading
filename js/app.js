@@ -29,8 +29,14 @@ const BUYERS = ["A", "B", "G", "H", "J"];
 // Default values from Python constants
 const DEFAULT_OFFERING = { C: 3.8364, D: 3.2683, E: 3.1671, F: 4.0388, I: 3.1638 };
 const DEFAULT_BIDDING = { A: 4.7114, B: 5.3546, G: 5.0999, H: 3.8625, J: 5.80 };
-const DEFAULT_SELLER_NRG = { C: 26.0, D: 22.0, E: 39.0, F: 29.0, I: 17.0 };
-const DEFAULT_BUYER_NRG = { A: 40.0, B: 9.0, G: 14.0, H: 33.0, J: 44.0 };
+const DEFAULT_SELLER_NRG = { C: 3.10, D: 2.90, E: 3.10, F: 2.90, I: 3.00 };
+const DEFAULT_BUYER_NRG = { A: 3.10, B: 2.90, G: 3.10, H: 2.90, J: 3.00 };
+
+// ค่า peak load จริงต่อราย (มาจาก ACTUAL_LOAD_DATA ในฝั่ง backend ที่บัสของแต่ละ player, หน่วย kW)
+const PEAK_LOAD_KW = {
+  A: 4.469, B: 7.769, G: 1.169, H: 1.169, J: 0.974,
+  C: 0.779, D: 1.169, E: 0.779, F: 1.169, I: 1.169,
+};
 
 // ── State ──────────────────────────────────────────────────────────────────
 let state = {
@@ -96,6 +102,47 @@ function updateBackendBadge(ok, version = "") {
   }
 }
 
+// ── Randomized default energies (within feasible caps) ──────────────────────
+function _rand2(min, max) { return Math.round((Math.random() * (max - min) + min) * 100) / 100; }
+
+function _randomEnergies(players, maxPer, maxTotal) {
+  const cap = Math.max(0.5, maxPer);
+  const lo = Math.max(0.5, cap * 0.4);
+  const vals = {};
+  let total = 0;
+  for (const p of players) { const v = _rand2(lo, cap); vals[p] = v; total += v; }
+  const safe = Math.max(players.length, maxTotal * 0.95); // keep sum under cap
+  if (total > safe && total > 0) {
+    const k = safe / total;
+    for (const p of players) vals[p] = Math.round(Math.max(0.5, vals[p] * k) * 100) / 100;
+  }
+  return vals;
+}
+
+// Randomize per-player energy so the TOTAL stays within max seller/buyer total
+// (and each player within its per-slot cap). Uses the feasible range from the
+// backend (/api/energy_range); falls back to safe caps if it is not loaded yet.
+function applyRandomDefaults() {
+  const er = wf.energyRange || {};
+  const ok = v => (typeof v === "number" && v > 0 && v < 9000);
+  const maxPerS = ok(er.max_kwh_per_seller) ? er.max_kwh_per_seller : 3.11;
+  const maxTotS = ok(er.max_kwh_total_seller) ? er.max_kwh_total_seller : 15.55;
+  const maxPerB = ok(er.max_kwh_per_buyer) ? er.max_kwh_per_buyer : 3.11;
+  const maxTotB = ok(er.max_kwh_total_buyer) ? er.max_kwh_total_buyer : 15.55;
+  state.sellerKwh = _randomEnergies(SELLERS, maxPerS, maxTotS);
+  state.buyerKwh = _randomEnergies(BUYERS, maxPerB, maxTotB);
+  const tS = SELLERS.reduce((a, s) => a + state.sellerKwh[s], 0);
+  const tB = BUYERS.reduce((a, b) => a + state.buyerKwh[b], 0);
+  logEvent(`\u{1F3B2} Random default energy — Seller total ${tS}/${maxTotS} kWh | Buyer total ${tB}/${maxTotB} kWh`);
+}
+
+// Re-roll handler (exposed for the 🎲 button).
+function randomizeEnergies() {
+  applyRandomDefaults();
+  renderInputs();
+  showToast("\u{1F3B2} สุ่มค่าพลังงานใหม่ (ไม่เกินเพดาน seller/buyer total)", "info");
+}
+
 // ── Energy range analysis (via backend) ────────────────────────────────────
 async function runEnergyRangeAnalysis() {
   const banner = document.getElementById("energy-range-banner");
@@ -117,6 +164,7 @@ async function runEnergyRangeAnalysis() {
     };
     logEvent("⚠️ Could not reach backend for energy range. Start start_backend.sh");
   }
+  applyRandomDefaults();   // สุ่มพลังงาน default ภายในเพดานที่ backend คำนวณ
   renderEnergyRangeBanner();
   renderInputs();
 }
@@ -444,6 +492,7 @@ function buildInputSection() {
     ? `<button class="btn btn-secondary" onclick="onResetDefaults()">↩ Reset &amp; Start Over</button>`
     : `<button class="btn btn-primary" onclick="onRunAnalysis()">${btnLabel}</button>
        <button class="btn btn-secondary" onclick="onResetDefaults()">↩ Reset Defaults</button>
+       <button class="btn btn-secondary" onclick="randomizeEnergies()">🎲 สุ่มพลังงาน</button>
        ${isRetry ? `<span class="retry-round-indicator">Round ${wf.round} / 2</span>` : ""}`;
 
   const maxKwh = wf.energyRange ? wf.energyRange.max_kwh_per_seller : 9999;
@@ -466,9 +515,10 @@ function buildInputSection() {
       </td>
       <td>
         <input type="number" id="senergy-${s}" class="tbl-input ${nw ? 'input-warn' : ''}"
-          step="0.1" min="0.1" value="${state.sellerKwh[s]}" oninput="onEnergyInput(this)">
+          step="0.01" min="0.01" value="${state.sellerKwh[s]}" oninput="onEnergyInput(this)">
         ${nw ? `<span class="nrg-warn" title="Exceeds recommended max">⚠️</span>` : ''}
       </td>
+      <td class="bus-cell">${(PEAK_LOAD_KW[s] ?? 0).toFixed(3)}</td>
     </tr>`;
   }).join('');
 
@@ -487,10 +537,16 @@ function buildInputSection() {
       </td>
       <td>
         <input type="number" id="benergy-${b}" class="tbl-input"
-          step="0.1" min="0.1" value="${state.buyerKwh[b]}" oninput="onEnergyInput(this)">
+          step="0.01" min="0.01" value="${state.buyerKwh[b]}" oninput="onEnergyInput(this)">
       </td>
+      <td class="bus-cell">${(PEAK_LOAD_KW[b] ?? 0).toFixed(3)}</td>
     </tr>`;
   }).join('');
+
+  const sumSellerKwh = SELLERS.reduce((a, s) => a + (parseFloat(state.sellerKwh[s]) || 0), 0);
+  const sumBuyerKwh = BUYERS.reduce((a, b) => a + (parseFloat(state.buyerKwh[b]) || 0), 0);
+  const sumSellerPeak = SELLERS.reduce((a, s) => a + (PEAK_LOAD_KW[s] || 0), 0);
+  const sumBuyerPeak = BUYERS.reduce((a, b) => a + (PEAK_LOAD_KW[b] || 0), 0);
 
   return `
     <div class="input-section">
@@ -530,12 +586,28 @@ function buildInputSection() {
               <th>Role</th>
               <th>Price (THB/kWh) [${FIT_PRICE}–${RETAIL_PRICE}]</th>
               <th>Energy (kWh)</th>
+              <th>Peak Load (kW)</th>
             </tr>
           </thead>
           <tbody>
             ${sellerRows}
-            <tr class="input-section-divider"><td colspan="5"></td></tr>
+            <tr class="input-total-row">
+              <td colspan="4" style="text-align:right;font-weight:600">Σ Seller (input)</td>
+              <td id="seller-energy-total" style="font-weight:600">${sumSellerKwh.toFixed(2)} kWh</td>
+              <td style="font-weight:600">${sumSellerPeak.toFixed(3)} kW</td>
+            </tr>
+            <tr class="input-section-divider"><td colspan="6"></td></tr>
             ${buyerRows}
+            <tr class="input-total-row">
+              <td colspan="4" style="text-align:right;font-weight:600">Σ Buyer (input)</td>
+              <td id="buyer-energy-total" style="font-weight:600">${sumBuyerKwh.toFixed(2)} kWh</td>
+              <td style="font-weight:600">${sumBuyerPeak.toFixed(3)} kW</td>
+            </tr>
+            <tr class="input-total-row" style="border-top:2px solid var(--border, #334155)">
+              <td colspan="4" style="text-align:right;font-weight:700">Σ รวมทั้งหมด (input / ACTUAL_LOAD_DATA)</td>
+              <td id="all-energy-total" style="font-weight:700">${(sumSellerKwh + sumBuyerKwh).toFixed(2)} kWh</td>
+              <td style="font-weight:700">${(sumSellerPeak + sumBuyerPeak).toFixed(3)} kW</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -805,11 +877,21 @@ function onPriceInput(el) {
   else if (el.id.startsWith("bid-")) state.biddingPrice[el.id.replace("bid-", "")] = val;
 }
 
+function updateInputTotals() {
+  const sS = SELLERS.reduce((a, s) => a + (parseFloat(state.sellerKwh[s]) || 0), 0);
+  const sB = BUYERS.reduce((a, b) => a + (parseFloat(state.buyerKwh[b]) || 0), 0);
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set("seller-energy-total", sS.toFixed(2) + " kWh");
+  set("buyer-energy-total", sB.toFixed(2) + " kWh");
+  set("all-energy-total", (sS + sB).toFixed(2) + " kWh");
+}
+
 function onEnergyInput(el) {
   const val = parseFloat(el.value);
   if (isNaN(val)) return;
   if (el.id.startsWith("senergy-")) state.sellerKwh[el.id.replace("senergy-", "")] = val;
   else if (el.id.startsWith("benergy-")) state.buyerKwh[el.id.replace("benergy-", "")] = val;
+  updateInputTotals();
 }
 
 // ── RENDER: DASHBOARD ─────────────────────────────────────────────────────────
@@ -1141,6 +1223,28 @@ function renderPfStatusCard(pfBase, pfPre, pfPost) {
   </div>`;
 }
 
+function renderHouseConsumptionTable() {
+  const hc = wf.apiResult && wf.apiResult.house_consumption_kw;
+  if (!hc) return "";
+  const rows = Object.entries(hc).map(([p, kw]) => {
+    const role = SELLERS.includes(p) ? "Seller" : "Buyer";
+    const loc = PLAYER_LOCATIONS[p] || "";
+    return `<tr><td>${p}</td><td>${role}</td><td>${loc}</td><td>${f4(kw)}</td></tr>`;
+  }).join("");
+  const total = Object.values(hc).reduce((a, v) => a + v, 0);
+  return `
+    <div class="pf-section" style="margin-top:20px">
+      <h4 class="pf-sub-title">\u{1F3E0} \u0e1e\u0e25\u0e31\u0e07\u0e07\u0e32\u0e19\u0e1a\u0e23\u0e34\u0e42\u0e20\u0e04\u0e02\u0e2d\u0e07\u0e1a\u0e49\u0e32\u0e19 (ACTUAL_LOAD_DATA) — \u0e15\u0e32\u0e23\u0e32\u0e07\u0e2d\u0e49\u0e32\u0e07\u0e2d\u0e34\u0e07</h4>
+      <p class="algo-note">POST_MATCH \u0e27\u0e34\u0e40\u0e04\u0e23\u0e32\u0e30\u0e2b\u0e4c\u0e40\u0e09\u0e1e\u0e32\u0e30\u0e18\u0e38\u0e23\u0e01\u0e23\u0e23\u0e21 P2P \u0e44\u0e21\u0e48\u0e44\u0e14\u0e49\u0e23\u0e27\u0e21\u0e42\u0e2b\u0e25\u0e14\u0e1a\u0e49\u0e32\u0e19\u0e19\u0e35\u0e49 \u0e1c\u0e39\u0e49\u0e43\u0e0a\u0e49\u0e2b\u0e31\u0e01\u0e2d\u0e2d\u0e01\u0e40\u0e2d\u0e07\u0e44\u0e14\u0e49</p>
+      <div class="table-scroll"><table class="data-table">
+        <thead><tr><th>House</th><th>Role</th><th>Bus</th><th>Consumption (kW)</th></tr></thead>
+        <tbody>${rows}
+          <tr style="font-weight:600"><td colspan="3">\u0e23\u0e27\u0e21</td><td>${f4(total)}</td></tr>
+        </tbody>
+      </table></div>
+    </div>`;
+}
+
 function renderPowerFlow() {
   const el = document.getElementById("tab-powerflow");
   if (!el || wf.step !== "results") return;
@@ -1152,6 +1256,7 @@ function renderPowerFlow() {
       <p class="algo-note">Newton-Raphson AC power flow via pandapower | IEEE 33-bus | 0.4 kV LV network with 22 kV/0.4 kV transformer</p>
       ${renderPfStatusCard(pfBase, pfPre, pfPost)}
       ${renderMetricsTable2(pfBase, pfPost)}
+      ${renderHouseConsumptionTable()}
       <div class="pf-case-tabs" style="margin-top:24px">
         <div class="pf-tab-bar">
           <button class="pf-tab-btn ${wf.pfTab === "base" ? "active" : ""}"  onclick="setPfTab('base')">🔵 BASE</button>
