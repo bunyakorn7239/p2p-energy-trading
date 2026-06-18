@@ -105,6 +105,7 @@ def run_case(
     buyer_energy_kwh:  Optional[Dict[str, float]] = None,
     seller_sold_kwh:   Optional[Dict[str, float]] = None,
     buyer_bought_kwh:  Optional[Dict[str, float]] = None,
+    seller_unsold_kwh: Optional[Dict[str, float]] = None,
 ) -> dict:
     """
     mode = "BASE"       – every bus uses ACTUAL_LOAD_DATA; no DG
@@ -112,8 +113,17 @@ def run_case(
     mode = "POST_MATCH" – buyers keep their full ACTUAL_LOAD_DATA load (they still
                           consume the same amount; the trade only changes the
                           source from grid to peer PV). Sellers place no load and
-                          inject their sold surplus (sold_kwh) as sgen. Other buses
+                          inject TWO separate sgen blocks:
+                            (1) P2P sold energy  (seller_sold_kwh)   -> DG_Seller{s}_P2P
+                            (2) unsold residual  (seller_unsold_kwh) -> DG_Seller{s}_GRID
+                          The residual is the energy that could not be matched under
+                          the bid >= offer rule and is sold back to the grid at FIT.
+                          Injecting it physically can push total injection above the
+                          local load and create reverse power flow toward the grid;
+                          the metrics block below reports that explicitly. Other buses
                           keep their ACTUAL_LOAD_DATA load.
+                          NOTE (provisional): selling the residual to the grid at FIT
+                          is a first-cut rule, to be refined later.
     mode = "BUYER_TEST" – mirror of PRE_MATCH for the buyer side: place a variable
                           load (buyer_energy_kwh) at each buyer bus, with no other
                           loads and no DG, then scale it up to find the
@@ -172,17 +182,35 @@ def run_case(
                                name=f"Load_Other{bidx}")
 
     # ── DG / sgen ────────────────────────────────────────────────────────────
+    # Track P2P-sold and grid-export (unsold residual) separately so the API can
+    # report how much of the injection is genuine peer delivery vs grid export.
+    total_dg_p2p_mw  = 0.0
+    total_dg_grid_mw = 0.0
     if mode in ("PRE_MATCH", "POST_MATCH"):
         for s in sellers:
             sidx = bus_idx(player_locations[s])
             if mode == "PRE_MATCH":
                 p_mw = kwh_to_mw((seller_energy_kwh or {})[s])
-            else:
-                p_mw = kwh_to_mw((seller_sold_kwh or {}).get(s, 0.0))
-            if p_mw > 1e-12:
-                total_dg_mw += p_mw
-                pp.create_sgen(net, bus=sidx, p_mw=p_mw, q_mvar=0.0,
-                               name=f"DG_Seller{s}")
+                if p_mw > 1e-12:
+                    total_dg_mw += p_mw
+                    total_dg_p2p_mw += p_mw
+                    pp.create_sgen(net, bus=sidx, p_mw=p_mw, q_mvar=0.0,
+                                   name=f"DG_Seller{s}")
+            else:  # POST_MATCH
+                # (1) energy actually matched & delivered peer-to-peer
+                p2p_mw = kwh_to_mw((seller_sold_kwh or {}).get(s, 0.0))
+                if p2p_mw > 1e-12:
+                    total_dg_mw += p2p_mw
+                    total_dg_p2p_mw += p2p_mw
+                    pp.create_sgen(net, bus=sidx, p_mw=p2p_mw, q_mvar=0.0,
+                                   name=f"DG_Seller{s}_P2P")
+                # (2) unsold residual exported back to the grid at FIT
+                grid_mw = kwh_to_mw((seller_unsold_kwh or {}).get(s, 0.0))
+                if grid_mw > 1e-12:
+                    total_dg_mw += grid_mw
+                    total_dg_grid_mw += grid_mw
+                    pp.create_sgen(net, bus=sidx, p_mw=grid_mw, q_mvar=0.0,
+                                   name=f"DG_Seller{s}_GRID")
 
     # ── Run power flow ────────────────────────────────────────────────────────
     converged = run_power_flow(net)
@@ -240,6 +268,11 @@ def run_case(
             "qlMvar":    round(float(net.res_line.at[i, "ql_mvar"]),     8),
             # Loading
             "loading":   round(float(net.res_line.at[i, "loading_percent"]), 6),
+            # Reverse flow: LINE_DATA is ordered from upstream (grid side) to
+            # downstream, so p_from_mw < 0 means power flows back toward the grid.
+            # A small tolerance (1e-6 MW = 0.001 kW) avoids flagging numerical noise
+            # on lines that carry virtually no power (dead-end stubs).
+            "reverse":   bool(float(net.res_line.at[i, "p_from_mw"]) < -1e-6),
         })
 
     # ── Extract transformer results ───────────────────────────────────────────
@@ -277,6 +310,26 @@ def run_case(
     total_load_mw  = float(net.load.p_mw.sum())         if len(net.load)        else 0.0
     total_sgen_mw  = float(net.sgen.p_mw.sum())         if len(net.sgen)        else 0.0
 
+    # ── Reverse power flow detection ──────────────────────────────────────────
+    # grid_supply_mw is the slack (grid) injection. Positive = grid supplies the
+    # feeder (normal import). Negative = surplus is pushed back into the grid
+    # (reverse flow at the substation / transformer).
+    grid_import_mw    = max(0.0, grid_supply_mw)
+    grid_export_mw    = max(0.0, -grid_supply_mw)
+    is_reverse_to_grid = grid_supply_mw < -1e-6
+    # Where the reverse-to-grid happens: power crosses the transformer from the
+    # LV point-of-common-coupling (PCC) bus up to the external-grid (slack) bus.
+    grid_bus = int(net.ext_grid.bus.iloc[0]) if len(net.ext_grid) else 0
+    pcc_bus  = int(net.trafo.lv_bus.iloc[0]) if len(net.trafo)    else 1
+    # Lines whose power flows toward the grid (opposite the nominal direction).
+    reverse_lines = [
+        {"line": l["lineIdx"], "from": l["from"], "to": l["to"],
+         "pFromMw": l["pFromMw"], "pFromKw": round(l["pFromMw"] * 1000, 4),
+         "loading": l["loading"]}
+        for l in line_results if l["reverse"]
+    ]
+    reverse_line_count = len(reverse_lines)
+
     loss_base   = total_load_mw + total_sgen_mw
     loss_pct    = (total_loss_mw / loss_base * 100.0) if loss_base > 1e-12 else 0.0
 
@@ -312,11 +365,21 @@ def run_case(
             "grid_supply_mw":       round(grid_supply_mw, 8),
             "max_line_loading_pct": round(max_load, 8),
             "total_dg_mw":          round(total_dg_mw, 8),
+            "total_dg_p2p_mw":      round(total_dg_p2p_mw, 8),
+            "total_dg_grid_mw":     round(total_dg_grid_mw, 8),
             "total_buyer_load_mw":  round(total_buyer_load, 8),
             "total_load_mw":        round(total_load_mw, 8),
             "total_sgen_mw":        round(total_sgen_mw, 8),
             "loss_pct":             round(loss_pct, 4),
+            # Reverse power flow
+            "grid_import_mw":       round(grid_import_mw, 8),
+            "grid_export_mw":       round(grid_export_mw, 8),
+            "is_reverse_to_grid":   is_reverse_to_grid,
+            "reverse_line_count":   reverse_line_count,
+            "grid_bus":             grid_bus,
+            "pcc_bus":              pcc_bus,
         },
+        "reverseLines": reverse_lines,
         "violations": {
             "under":   violations_under,
             "over":    violations_over,
@@ -455,6 +518,7 @@ def powerflow_case():
             buyer_energy_kwh =data.get("buyer_energy_kwh"),
             seller_sold_kwh  =data.get("seller_sold_kwh"),
             buyer_bought_kwh =data.get("buyer_bought_kwh"),
+            seller_unsold_kwh=data.get("seller_unsold_kwh"),
         )
         return jsonify(result)
     except Exception as e:
@@ -506,6 +570,21 @@ def analyze():
     sold_kwh   = match_res["soldKwh"]
     bought_kwh = match_res["boughtKwh"]
 
+    # Unsold residual per seller = offered energy that could not be matched under
+    # the bid >= offer rule. Under the current (provisional) settlement rule this
+    # residual is sold back to the grid at FIT and is injected as a separate sgen
+    # block in POST_MATCH so its effect on reverse power flow is visible.
+    unsold_kwh = {
+        s: max(0.0, float(seller_energy_kwh.get(s, 0.0)) - float(sold_kwh.get(s, 0.0)))
+        for s in sellers
+    }
+    # Buyer unmet = demand bought from the main grid at ToU (economic side only;
+    # the buyer's physical load already stays in POST_MATCH, drawn from the grid).
+    unmet_kwh = {
+        b: max(0.0, float(buyer_energy_kwh.get(b, 0.0)) - float(bought_kwh.get(b, 0.0)))
+        for b in buyers
+    }
+
     # ── 3. Power flow – BASE ──────────────────────────────────────────────────
     try:
         pf_base = run_case("BASE", sellers, buyers, player_locations)
@@ -525,9 +604,77 @@ def analyze():
                            seller_energy_kwh=seller_energy_kwh,
                            buyer_energy_kwh =buyer_energy_kwh,
                            seller_sold_kwh  =sold_kwh,
-                           buyer_bought_kwh =bought_kwh)
+                           buyer_bought_kwh =bought_kwh,
+                           seller_unsold_kwh=unsold_kwh)
     except Exception as e:
         pf_post = {"converged": False, "error": str(e)}
+
+    # ── 6. Reverse power flow comparison (BASE vs POST) + settlement summary ──
+    def _rf(pf):
+        m = (pf or {}).get("metrics", {}) if isinstance(pf, dict) else {}
+        rlines = (pf or {}).get("reverseLines", []) if isinstance(pf, dict) else []
+        return {
+            "grid_supply_kw":  round(m.get("grid_supply_mw", 0.0) * 1000, 4),
+            "grid_export_kw":  round(m.get("grid_export_mw", 0.0) * 1000, 4),
+            "grid_import_kw":  round(m.get("grid_import_mw", 0.0) * 1000, 4),
+            "is_reverse":      bool(m.get("is_reverse_to_grid", False)),
+            "reverse_lines":   m.get("reverse_line_count", 0),
+            "grid_bus":        m.get("grid_bus", 0),
+            "pcc_bus":         m.get("pcc_bus", 1),
+            "reverse_line_list": [
+                {"from": l["from"], "to": l["to"], "pFromKw": l["pFromKw"],
+                 "loading": l["loading"]} for l in rlines
+            ],
+            "max_loading_pct": round(m.get("max_line_loading_pct", 0.0), 4),
+            "loss_kw":         round(m.get("total_loss_mw", 0.0) * 1000, 4),
+        }
+
+    total_unsold = sum(unsold_kwh.values())
+    total_unmet  = sum(unmet_kwh.values())
+
+    # Enrich POST reverse lines with BASE comparison so the UI can distinguish
+    # "reversed AND more loaded" (concerning) from "reversed but less loaded"
+    # (direction flipped while magnitude dropped — e.g. line 3->4). The standard
+    # definition of reverse flow is a *direction* reversal (p_from < 0); whether
+    # %loading rises depends on whether the reversed magnitude exceeds the
+    # original forward magnitude, which is a separate question.
+    base_line_load = {}
+    if isinstance(pf_base, dict):
+        for l in pf_base.get("lineResults", []):
+            base_line_load[(l["from"], l["to"])] = l["loading"]
+    post_reverse_detail = []
+    if isinstance(pf_post, dict):
+        for l in pf_post.get("reverseLines", []):
+            bl = base_line_load.get((l["from"], l["to"]), 0.0)
+            delta = round(l["loading"] - bl, 4)
+            post_reverse_detail.append({
+                "from": l["from"], "to": l["to"],
+                "pFromKw": l["pFromKw"],
+                "postLoading": l["loading"], "baseLoading": round(bl, 4),
+                "deltaLoading": delta, "loadingUp": bool(delta > 1e-6),
+            })
+
+    reverse_flow_summary = {
+        "base": _rf(pf_base),
+        "post": _rf(pf_post),
+        "post_reverse_detail": post_reverse_detail,
+        # The unsold residual injected as grid export in POST_MATCH (kW == kWh/slot)
+        "grid_export_from_unsold_kwh": round(total_unsold, 4),
+        "grid_export_fit_revenue":     round(total_unsold * FIT_PRICE, 2),
+        "buyer_unmet_kwh":             round(total_unmet, 4),
+        "note": ("Reverse flow line = direction of real power reverses "
+                 "(p_from < 0). This is NOT the same as %loading rising: a line "
+                 "can reverse while its loading drops if the reversed magnitude is "
+                 "smaller than the original forward magnitude. Residual seller "
+                 "energy is sold back to the grid at FIT (provisional rule, to be "
+                 "refined later). Buyer shortfall is bought from the grid at ToU."),
+    }
+
+    settlement_summary = {
+        "seller_unsold_kwh": {s: round(v, 4) for s, v in unsold_kwh.items()},
+        "buyer_unmet_kwh":   {b: round(v, 4) for b, v in unmet_kwh.items()},
+        "fit_price":         FIT_PRICE,
+    }
 
     return jsonify({
         "success":     True,
@@ -538,6 +685,8 @@ def analyze():
             "pre_match":  pf_pre,
             "post_match": pf_post,
         },
+        "reverse_flow": reverse_flow_summary,
+        "settlement":   settlement_summary,
     })
 
 

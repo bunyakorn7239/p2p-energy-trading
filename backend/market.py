@@ -46,6 +46,18 @@ def tou_rate(hour: int) -> float:
 
 
 # =============================================================================
+# กติกาการคิดเงินส่วนที่ไม่ได้จับคู่  (ให้ตรงกับ server.py POST_MATCH และ app.js)
+#   - Seller ที่ขายไม่ออก (unsold residual) -> ขายคืนกริดที่ราคา FIT
+#       (ฝั่ง power flow: server.py inject เป็น sgen ก้อน DG_Seller{s}_GRID
+#        ซึ่งอาจทำให้เกิด reverse power flow ออกกริด)
+#   - Buyer ที่ซื้อไม่ครบ (unmet/deficit) -> ซื้อจากกริดหลักที่ราคา ToU
+#   หมายเหตุ: เป็นกติกาเบื้องต้น เดี๋ยวมีการปรับปรุงอีกทีในภายหลัง
+# =============================================================================
+SETTLEMENT_NOTE = ("Provisional: seller residual -> grid @ FIT; "
+                   "buyer deficit -> grid @ ToU. To be refined later.")
+
+
+# =============================================================================
 # State ของตลาด (in-memory; โปรดักชันค่อยย้ายไป DB)
 # =============================================================================
 MARKET_SLOTS: Dict[str, dict] = {}
@@ -121,10 +133,19 @@ def price_preview(o: dict) -> dict:
         offer = float(o["seller_energy_kwh"][s])
         sold = mr["soldKwh"].get(s, 0.0)
         unsold = max(0.0, offer - sold)
-        rev_grid = offer * FIT_PRICE
-        rev_p2p = seller_p2p_rev[s] + unsold * FIT_PRICE
+        # Settlement rule (provisional, to be refined later):
+        #   P2P-sold part  -> paid at the P2P clearing price (mid of bid/offer)
+        #   unsold residual -> sold back to the grid at FIT
+        rev_grid = offer * FIT_PRICE                  # baseline: sell everything to grid
+        rev_p2p_only = seller_p2p_rev[s]              # revenue from matched trades
+        grid_export_rev = unsold * FIT_PRICE          # residual exported to grid @ FIT
+        rev_p2p = rev_p2p_only + grid_export_rev      # total under P2P + residual export
         sellers_prev[s] = {
             "offer_kwh": round(offer, 3), "p2p_kwh": round(sold, 3),
+            "unsold_kwh": round(unsold, 3),
+            "grid_export_kwh": round(unsold, 3),       # residual -> grid @ FIT
+            "grid_export_rev": round(grid_export_rev, 2),
+            "rev_p2p_only": round(rev_p2p_only, 2),
             "rev_grid_only": round(rev_grid, 2), "rev_p2p": round(rev_p2p, 2),
             "gain": round(rev_p2p - rev_grid, 2),
         }
@@ -259,7 +280,7 @@ def settle_slot(slot_id: str) -> dict:
             if ss == s:
                 rev += qty * act["factor"].get(s, 1.0) * cl["trade_price"][key]
         penalty = shortfall * rate          # ส่งไม่ครบ -> ค่าปรับราคากริด
-        grid_credit = surplus * FIT_PRICE   # ผลิตเกิน -> ขายกริดที่ FIT
+        grid_credit = surplus * FIT_PRICE   # ผลิตเกิน/ขายไม่ออก -> ขายกริดที่ FIT (ดู SETTLEMENT_NOTE)
         bills[s] = {
             "role": "seller", "claimed_kwh": round(claimed, 3),
             "delivered_kwh": round(delivered, 3), "shortfall_kwh": round(shortfall, 3),

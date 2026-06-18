@@ -1179,11 +1179,11 @@ function renderEnergyFlowVisualization(trades, qsRem, qbRem) {
             ${buyerRows}
             ${totalResidual > 0.001 ? `
             <div class="ef-pool-card">
-              <div class="ef-pool-icon">🔋</div>
-              <div class="ef-pool-name">Energy Pool</div>
-              <div class="ef-pool-sub">(Virtual Pool)</div>
+              <div class="ef-pool-icon">🔌</div>
+              <div class="ef-pool-name">ขายคืนกริด @ FIT</div>
+              <div class="ef-pool-sub">(Residual → Grid export)</div>
               <div class="ef-pool-kwh">${f2(totalResidual)} kWh</div>
-              <div class="ef-pool-note">⚡ ไฟจะไหลไปไหนต่อ → Next Part</div>
+              <div class="ef-pool-note">≈ ${f2(totalResidual * FIT_PRICE)} THB @ ${FIT_PRICE} · inject เป็น sgen ใน POST_MATCH · provisional ปรับปรุงภายหลัง</div>
             </div>` : ""}
           </div>
         </div>
@@ -1191,7 +1191,7 @@ function renderEnergyFlowVisualization(trades, qsRem, qbRem) {
         <div class="ef-sum-stats">
           <div class="ef-sum-stat"><span>Total Sent</span><strong class="pos">${f2(totalSold)} kWh</strong></div>
           <div class="ef-sum-stat"><span>Total Received</span><strong class="pos">${f2(totalBought)} kWh</strong></div>
-          <div class="ef-sum-stat"><span>Residual → Pool</span><strong style="color:var(--purple)">${f2(totalResidual)} kWh</strong></div>
+          <div class="ef-sum-stat"><span>Residual → Grid @ FIT</span><strong style="color:var(--purple)">${f2(totalResidual)} kWh</strong></div>
           <div class="ef-sum-stat"><span>Trade Pairs</span><strong>${pairs.length}</strong></div>
         </div>
       </div>
@@ -1338,7 +1338,55 @@ function renderCaseDetail(pf, label, accentClass) {
           <div class="pf-sys-stat"><span>Total DG Injection</span><strong>${f8(m.total_dg_mw || 0)} MW</strong></div>
           <div class="pf-sys-stat"><span>Total Buyer Load</span><strong>${f8(m.total_buyer_load_mw || 0)} MW</strong></div>
           <div class="pf-sys-stat"><span>Reactive Losses</span><strong>${f6((m.total_loss_mvar || 0) * 1000)} kVAR</strong></div>
+          ${(m.total_dg_grid_mw || 0) > 1e-9 ? `<div class="pf-sys-stat"><span>DG: P2P / Grid-export</span><strong>${f6((m.total_dg_p2p_mw || 0) * 1000)} / ${f6((m.total_dg_grid_mw || 0) * 1000)} kW</strong></div>` : ""}
+          <div class="pf-sys-stat"><span>Reverse to Grid</span><strong style="${m.is_reverse_to_grid ? "color:#ef4444" : ""}">${m.is_reverse_to_grid ? `ใช่ — export ${f6((m.grid_export_mw || 0) * 1000)} kW ⚠️` : "ไม่ (grid ยังจ่ายเข้า)"}</strong></div>
+          <div class="pf-sys-stat"><span>Reverse-flow Lines</span><strong style="${(m.reverse_line_count || 0) > 0 ? "color:#f59e0b" : ""}">${m.reverse_line_count || 0} สาย</strong></div>
         </div>
+        ${((m.reverse_line_count || 0) > 0 || m.is_reverse_to_grid) ? `
+        <div class="pf-reverse-banner" style="margin-top:10px;padding:11px 13px;border-radius:8px;background:${m.is_reverse_to_grid ? "rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35)" : "rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35)"}">
+          <strong style="color:${m.is_reverse_to_grid ? "#ef4444" : "#f59e0b"}">${m.is_reverse_to_grid ? "⚠️ Reverse Power Flow — ย้อนออกกริด" : "ℹ️ Local Reverse Flow — ย้อนภายในสาย"}</strong>
+
+          <div style="margin-top:7px;font-size:.83rem;line-height:1.55;opacity:.92">
+            <div><strong>Reverse to grid</strong> คือกรณีที่กำลังไฟไหลย้อนจากโครงข่ายขึ้นไปที่กริดหลัก (grid supply ติดลบ) เกิดเมื่อกำลัง inject รวม (P2P + ส่วนขายคืนกริด) มากกว่าโหลดทั้งระบบ ไฟส่วนเกินจึงไหลผ่านหม้อแปลงขึ้นกริด</div>
+            <div style="margin-top:3px"><strong>Reverse flow line</strong> คือสายที่กระแสไหลสวนทิศปกติ (จากปลายสายกลับมาทางต้นทาง) เกิดได้แม้ยังไม่ย้อนออกกริด เมื่อ seller ฉีดกำลังเกินโหลดในละแวกนั้น ไฟเลยไหลย้อนไปเลี้ยงโหลดที่อยู่ทางต้นสาย</div>
+          </div>
+
+          ${m.is_reverse_to_grid ? `
+          <div style="margin-top:8px;font-size:.86rem;line-height:1.5">
+            ▸ <strong>ย้อนออกกริดที่:</strong> Bus ${m.grid_bus ?? 0} (กริดหลัก/slack) ผ่านหม้อแปลง ↑ จาก Bus ${m.pcc_bus ?? 1} (จุดเชื่อมต่อ PCC)<br>
+            ▸ <strong>ปริมาณย้อนออก:</strong> ${f6((m.grid_export_mw || 0) * 1000)} kW
+            &nbsp;(BASE กริดจ่ายเข้า ${f6((R?.pfBase?.metrics?.grid_supply_mw || 0) * 1000)} kW → POST ${f6((m.grid_supply_mw || 0) * 1000)} kW)
+          </div>` : `
+          <div style="margin-top:8px;font-size:.86rem">
+            กรณีนี้ <strong>ยังไม่ย้อนออกกริด</strong> (กริดยังจ่ายเข้า ${f6((m.grid_supply_mw || 0) * 1000)} kW) แต่มีไฟย้อนภายในสายด้านล่าง
+          </div>`}
+
+          ${(pf.reverseLines && pf.reverseLines.length) ? `
+          <div style="margin-top:8px;font-size:.85rem">
+            <strong>Reverse flow lines (${pf.reverseLines.length} สาย):</strong>
+            <div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:6px">
+              ${pf.reverseLines.map(l => {
+    const bl = (R?.pfBase?.lineResults || []).find(x => x.from === l.from && x.to === l.to);
+    const baseLoad = bl ? bl.loading : 0;
+    const up = l.loading > baseLoad + 1e-6;
+    const arrow = up ? "↑" : "↓";
+    const col = up ? "rgba(239,68,68,.16)" : "rgba(245,158,11,.13)";
+    return `<span style="padding:2px 8px;border-radius:5px;background:${col};font-size:.8rem" title="BASE ${f4(baseLoad)}% → POST ${f4(l.loading)}%">Bus ${l.from}→${l.to} · ${f4(l.pFromKw)} kW · load ${f4(baseLoad)}%→${f4(l.loading)}% ${arrow}</span>`;
+  }).join("")}
+            </div>
+            <div style="margin-top:6px;opacity:.78;font-size:.78rem;line-height:1.5">
+              หมายเหตุ: <strong>reverse flow = ทิศทางกลับด้าน</strong> (กำลังติดลบ = ไหลจากปลายสายกลับมาต้นสาย) ซึ่ง<strong>ไม่ใช่</strong>เรื่องเดียวกับ %loading เพิ่ม
+              · ↑ = loading สูงกว่า BASE (กระแสย้อนใหญ่กว่ากระแสเดิม) · ↓ = กลับทิศแต่ loading <strong>ลดลง</strong> เพราะกระแสย้อนเล็กกว่ากระแสเดิม (เช่น Bus 3→4)
+              ดังนั้นถ้าตรวจด้วยเกณฑ์ "%loading POST &gt; BASE" จะเห็นเฉพาะสายกลุ่ม ↑ เท่านั้น
+            </div>
+          </div>` : ""}
+
+          <div style="margin-top:8px;font-size:.82rem;opacity:.85">
+            <strong>ผลกระทบ:</strong> ${m.is_reverse_to_grid
+        ? "แรงดันปลายสายอาจสูงขึ้น (เสี่ยง over-voltage) และ %line loading บางสายเพิ่ม การอ้างว่า P2P ช่วยลดภาระ feeder จะจริงเฉพาะช่วงที่ไม่ย้อนออกกริด ควรตรวจ thermal/voltage limit ประกอบ"
+        : "เป็นการกระจายไฟภายใน (internal redistribution) ปกติ ภาพรวม loss/voltage ยังดีขึ้นได้ แต่ %line loading บางสายจะสูงกว่า BASE ไม่ใช่ทุกสายที่ลดลง"}
+          </div>
+        </div>` : ""}
       </div>
 
       <!-- 1. Bus Voltages (matches Python display_bus_voltages) -->
@@ -1374,6 +1422,11 @@ function renderCaseDetail(pf, label, accentClass) {
 
       <!-- 3. Line Loading (matches Python display_line_loading) -->
       <h4 class="pf-sub-title" style="margin-top:20px">3. Line Loading — Loading% = (I_actual / I_max_thermal) × 100</h4>
+      <div class="pf-note" style="margin:6px 0;font-size:.8rem;opacity:.82;line-height:1.5">
+        หมายเหตุ: คอลัมน์ <strong>P_from (kW)</strong> คือกำลังจริงที่เข้าสายฝั่งต้นทาง (from-bus)
+        · <strong style="color:#22c55e">ค่าเป็นบวก = ไหลปกติ</strong> (from → to ออกจากกริด)
+        · <strong style="color:#ef4444">ค่าเป็นลบ = ไหลย้อน (reverse)</strong> (to → from กลับเข้าหากริด)
+      </div>
       ${(m.max_line_loading_pct || 0) > 100 ? `
         <div class="wf-alert alert-grid" style="margin:8px 0">
           <div class="wf-alert-title">🔥 THERMAL LIMIT EXCEEDED — ระบบเกิด overload เกินขีดจำกัดความร้อนที่สายส่งรับได้</div>
@@ -1381,10 +1434,11 @@ function renderCaseDetail(pf, label, accentClass) {
         </div>` : ""}
       <div class="table-scroll"><table class="data-table">
         <thead><tr><th>Line#</th><th>From</th><th>To</th>
-          <th>I_actual (kA)</th><th>I_max (kA)</th><th>Loading (%)</th><th>Status</th></tr></thead>
+          <th>I_actual (kA)</th><th>I_max (kA)</th><th>P_from (kW)</th><th>Loading (%)</th><th>Status</th></tr></thead>
         <tbody>${(pf.lineResults || []).map(l => `<tr class="${l.loading > 100 ? "row-warn" : ""}">
           <td>${l.lineIdx}</td><td>${l.from}</td><td>${l.to}</td>
           <td>${f8(l.iFromKa)}</td><td>${f4(l.maxIKa)}</td>
+          <td style="color:${l.reverse ? "#ef4444" : (l.pFromMw > 0 ? "#22c55e" : "")};white-space:nowrap">${f4(l.pFromMw * 1000)}${l.reverse ? " ⮌ ย้อน" : ""}</td>
           <td><div class="load-bar-wrap">
             <div class="load-bar" style="width:${Math.min(l.loading, 100) * 0.7}px;background:${l.loading > 80 ? "#ef4444" : "#22c55e"}"></div>
             <span>${f6(l.loading)}</span>
