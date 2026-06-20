@@ -70,9 +70,19 @@ LINE_DATA = [
     (34, 35, 0.02),   # Line 33  → Seller F
 ]
 
-# Line electrical parameters (same as original Python file)
-R_OHM_PER_KM = 0.3415404
-X_OHM_PER_KM = 0.4257663
+# Line electrical parameters
+# ---------------------------------------------------------------------------
+# พิกัดกระแสสายส่งถูกลดเป็น Imax = 0.34/3 kA (สายเล็กลง ~3 เท่า) ดังนั้นค่า
+# impedance ต่อ กม. ถูกปรับขึ้น ×3 ให้สอดคล้องกับขนาดตัวนำที่เล็กลง
+#   - R ∝ 1/พื้นที่หน้าตัด → ลดพิกัดกระแส ~3 เท่า ⇒ R เพิ่ม ~3 เท่า (สมเหตุผลทางฟิสิกส์)
+#   - X ปรับ ×3 ให้สอดคล้องกัน (เป็นการประมาณ เพราะ X ขึ้นกับเรขาคณิตมากกว่าพื้นที่)
+# หมายเหตุ: การปรับนี้ทำให้ค่า loss/แรงดันตก ต่างจากชุดพารามิเตอร์เดิมที่ calibrate
+# ให้ตรงกับ Python reference เดิม (ตัวเลข BASE จะไม่ตรงของเก่าอีกต่อไป)
+BASE_R_OHM_PER_KM = 0.3415404       # ค่าเดิมก่อนปรับ (อ้างอิง)
+BASE_X_OHM_PER_KM = 0.4257663       # ค่าเดิมก่อนปรับ (อ้างอิง)
+CONDUCTOR_SCALE   = 3.0             # ตัวคูณ impedance ตามการลดพิกัดกระแส (Imax/3)
+R_OHM_PER_KM = BASE_R_OHM_PER_KM * CONDUCTOR_SCALE   # = 1.0246212 ohm/km
+X_OHM_PER_KM = BASE_X_OHM_PER_KM * CONDUCTOR_SCALE   # = 1.2772989 ohm/km
 C_NF_PER_KM  = 10.89339
 MAX_I_KA     = 0.34 / 3 # = 0.11333 kA
 
