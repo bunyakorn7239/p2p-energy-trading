@@ -2,7 +2,7 @@ import sys
 sys.path.append('.')
 from server import V_MIN, V_MAX, SELLERS, PLAYER_LOCATIONS, run_case
 n = len(SELLERS)
-UPPER = 30000.0
+UPPER = 300.0 # 10 kWp × 5.5 PSH × 0.85 PR × 5 sellers ≈ 234 → ปัดขึ้น 300
 lo = 0.0
 hi = UPPER
 

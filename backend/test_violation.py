@@ -3,21 +3,17 @@ import json
 sys.path.append('.')
 from server import run_case, SELLERS, BUYERS, PLAYER_LOCATIONS, V_MIN, V_MAX
 
-# 1. Define energies exceeding the limit
+# Realistic PV injection: บ้านละ ~10 kWp best-case ≈ 47 kWh/วัน
 seller_energy_kwh = {
-    "C": 1200.0,
-    "D": 900.0,
-    "E": 1000.0,
-    "F": 1100.0,
-    "I": 950.0
-}  # Total = 5150 kWh (Exceeds 4397 limit)
+    "C": 47.0,
+    "D": 47.0,
+    "E": 47.0,
+    "F": 47.0,
+    "I": 47.0
+}  # Total = 235 kWh (อยู่ในช่วง realistic, ต่ำกว่า UPPER 300)
 
 buyer_energy_kwh = {
-    "A": 1000.0,
-    "B": 1000.0,
-    "G": 1000.0,
-    "H": 1000.0,
-    "J": 1150.0
+    "A": 47.0, "B": 47.0, "G": 47.0, "H": 47.0, "J": 47.0
 }
 
 # 2. Run the PRE_MATCH case (which checks the injection upper bound)
