@@ -15,7 +15,7 @@ Run:
 """
 from __future__ import annotations
 
-import sys, json, os
+import sys, json, os, hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandapower as pp
@@ -404,105 +404,106 @@ def health():
 # /api/energy_range  –  binary-search max feasible injection per seller
 #                       and max feasible withdrawal per buyer
 # ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# /api/energy_range  –  feasible energy window (cached + reverse-flow toggle)
+# ----------------------------------------------------------------------------
+_DEFAULT_ER = {
+    "load_cap_total":           15.55,   # op_total = buyer physical load
+    "relief_total":             15.55,   # grid-relief cap (no reverse flow)
+    "relief_per":               3.11,
+    "hard_total_premaatch":     54.31,   # PRE_MATCH hard limit (reference)
+    "hard_total":               61.79,   # POST_MATCH hard limit (real edge)
+    "hard_per":                 12.35,   # = 61.79 / 5 (safe input ceiling 12.3)
+    "thermal_max_total_seller": 54.31,
+    "thermal_max_total_buyer":  70.91,
+}
+
+_ER_CACHE = {}
+
+def _is_default(sellers, buyers, player_locations):
+    return (sorted(sellers) == sorted(SELLERS) and
+            sorted(buyers)  == sorted(BUYERS) and
+            player_locations == PLAYER_LOCATIONS)
+
+def _build_response(relief_per, relief_total, hard_per, hard_total,
+                    op_total, allow_reverse, extra=None):
+    if allow_reverse:
+        cap_per, cap_total = hard_per, hard_total
+        mode = "hosting-capacity (reverse flow allowed)"
+    else:
+        cap_per, cap_total = relief_per, relief_total
+        mode = "grid-relief (no reverse flow)"
+    out = {
+        "allow_reverse_flow": allow_reverse,
+        "mode": mode,
+        # active cap the UI should enforce on inputs:
+        "max_kwh_per_seller":   cap_per,
+        "max_kwh_total_seller": cap_total,
+        "max_kwh_per_buyer":    cap_per,
+        "max_kwh_total_buyer":  cap_total,
+        # both caps, always provided so a UI toggle needs no refetch:
+        "relief_per": relief_per, "relief_total": relief_total,
+        "hard_per": hard_per,     "hard_total": hard_total,
+        "load_cap_total": op_total,
+        "min_kwh_per_seller": 0, "min_kwh_per_buyer": 0,
+        "feasibility_note": (
+            f"{mode}: cap = {cap_total:.2f} kW total ({cap_per:.2f}/each). "
+            f"reverse-flow onset ~15.84 kW; hard over-voltage limit {hard_total:.2f} kW."
+        ),
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
 @app.route("/api/energy_range", methods=["POST"])
 def energy_range():
     data = request.json or {}
     sellers = data.get("sellers", SELLERS)
-    buyers = data.get("buyers", BUYERS)
+    buyers  = data.get("buyers",  BUYERS)
     player_locations = data.get("player_locations", PLAYER_LOCATIONS)
-    n = len(sellers)
+    allow_reverse = bool(data.get("allow_reverse_flow", False))
+    n, n_b = len(sellers), len(buyers)
     if n == 0:
-        return jsonify({"max_kwh_per_seller": 0, "max_kwh_total": 0,
+        return jsonify({"max_kwh_per_seller": 0, "max_kwh_total_seller": 0,
                         "feasibility_note": "No sellers configured."})
 
-    def test_seller_total(total_kwh: float) -> bool:
-        per = total_kwh / n
-        try:
-            res = run_case("PRE_MATCH", sellers, [], player_locations,
-                           seller_energy_kwh={s: per for s in sellers})
-            if not res.get("converged"):
+    # 1) Instant path for the default layout.
+    if _is_default(sellers, buyers, player_locations):
+        d = _DEFAULT_ER
+        return jsonify(_build_response(
+            d["relief_per"], d["relief_total"], d["hard_per"], d["hard_total"],
+            d["load_cap_total"], allow_reverse,
+            extra={"thermal_max_total_seller": d["thermal_max_total_seller"],
+                   "thermal_max_total_buyer":  d["thermal_max_total_buyer"]}))
+
+    # 2) Custom layout: compute + cache (keyed on layout, not on the flag).
+    key = hashlib.md5(json.dumps(
+        [sorted(sellers), sorted(buyers), sorted(player_locations.items())],
+        sort_keys=True).encode()).hexdigest()
+    if key not in _ER_CACHE:
+        def seller_ok(total):
+            per = total / n
+            try:
+                r = run_case("PRE_MATCH", sellers, [], player_locations,
+                             seller_energy_kwh={s: per for s in sellers})
+                if not r.get("converged"): return False
+                v = r["violations"]
+                return len(v["under"])==0 and len(v["over"])==0 and len(v["thermal"])==0
+            except Exception:
                 return False
-            v = res.get("violations", {})
-            return (len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
-                    and len(v.get("thermal", [])) == 0)
-        except Exception:
-            return False
-
-    def test_buyer_total(total_kwh: float) -> bool:
-        n_b = len(buyers)
-        if n_b == 0:
-            return False
-        per = total_kwh / n_b
-        try:
-            # Use the dedicated BUYER_TEST mode: it places a variable load at each
-            # buyer bus so the search can find the under-voltage limit. (POST_MATCH
-            # fixes buyer load to ACTUAL_LOAD_DATA, so it cannot be used here.)
-            res = run_case("BUYER_TEST", [], buyers, player_locations,
-                           buyer_energy_kwh={b: per for b in buyers})
-            if not res.get("converged"):
-                return False
-            v = res.get("violations", {})
-            return (len(v.get("under", [])) == 0 and len(v.get("over", [])) == 0
-                    and len(v.get("thermal", [])) == 0)
-        except Exception:
-            return False
-
-    UPPER = 30_000.0
-
-    # --- Sellers Binary Search ---
-    lo_s, hi_s = 0.0, UPPER
-    for _ in range(40):
-        mid = (lo_s + hi_s) / 2.0
-        if test_seller_total(mid):
-            lo_s = mid
-        else:
-            hi_s = mid
-
-    # --- Buyers Binary Search ---
-    lo_b, hi_b = 0.0, UPPER
-    for _ in range(40):
-        mid = (lo_b + hi_b) / 2.0
-        if test_buyer_total(mid):
-            lo_b = mid
-        else:
-            hi_b = mid
-
-    # ── Operating cap: inject รวม <= load (ไม่เกิด reverse flow -> POST_MATCH < BASE) ──
-    # ENERGY_WINDOW_HOURS = 1.0 => kWh ที่กรอก = kW ที่ inject ใน snapshot 1 ชม.
-    # PV ที่พื้นที่ดูดซับได้โดยไม่ส่งออกกริด ถูกจำกัดด้วยโหลดที่เหลือใน POST_MATCH
-    # คือโหลดบัส buyer (โหลดบัส seller ถือว่า PV เลี้ยงตัวเองหมดแล้ว). การ cap พลังงาน
-    # แนะนำที่ค่านี้ ทำให้การศึกษาอยู่ใน grid-relief regime แทน reverse-flow regime.
-    op_total = sum(
-        ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]), (0.0, 0.0))[0]
-        for b in buyers
-    ) * 1000.0  # kW (== kWh ต่อ slot 1 ชม.)
-
-    cap_total_seller = min(lo_s, op_total)
-    cap_total_buyer  = min(lo_b, op_total)
-    n_b = len(buyers)
-
-    return jsonify({
-        "max_kwh_per_seller":   round(cap_total_seller / n, 2),
-        "max_kwh_total_seller": round(cap_total_seller, 2),
-        "max_kwh_per_buyer":    round(cap_total_buyer / n_b, 2) if n_b > 0 else 0,
-        "max_kwh_total_buyer":  round(cap_total_buyer, 2),
-        "thermal_max_total_seller": round(lo_s, 2),   # เพดาน thermal เดิม (อ้างอิง)
-        "thermal_max_total_buyer":  round(lo_b, 2),
-        "load_cap_total":           round(op_total, 2),
-        "min_kwh_per_seller": 0,
-        "min_kwh_per_buyer": 0,
-        "feasibility_note": (
-            f"Operating cap (window=1): inject รวม <= โหลด buyer {op_total:.2f} kW "
-            f"เพื่อเลี่ยง reverse flow ให้ POST_MATCH < BASE. "
-            f"เพดาน thermal/voltage ({MAX_LINE_LOADING}%, [{V_MIN},{V_MAX}] p.u.) "
-            f"= seller {lo_s:.1f}, buyer {lo_b:.1f} kWh (เป็นเพดานแข็งอีกชั้น)."
-        ),
-    })
+        lo_s, hi_s = 0.0, 300.0
+        for _ in range(40):
+            mid = (lo_s + hi_s) / 2.0
+            lo_s, hi_s = (mid, hi_s) if seller_ok(mid) else (lo_s, mid)
+        op_total = sum(ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]), (0.0, 0.0))[0]
+                       for b in buyers) * 1000.0
+        _ER_CACHE[key] = (round(min(lo_s, op_total)/n, 2), round(min(lo_s, op_total), 2),
+                          round(lo_s/n, 2), round(lo_s, 2), round(op_total, 2))
+    rp, rt, hp, ht, op_total = _ER_CACHE[key]
+    return jsonify(_build_response(rp, rt, hp, ht, op_total, allow_reverse))
 
 
-# ---------------------------------------------------------------------------
-# /api/powerflow_case  –  run a single power flow case
-# ---------------------------------------------------------------------------
 @app.route("/api/powerflow_case", methods=["POST"])
 def powerflow_case():
     data = request.json or {}
