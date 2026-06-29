@@ -45,6 +45,14 @@ ENERGY_WINDOW_HOURS = 1.0
 FIT_PRICE           = 2.20
 RETAIL_PRICE        = 5.80
 
+# Human-readable case names shown in the UI (internal mode keys stay BASE /
+# PRE_MATCH / POST_MATCH so existing logic and response keys do not change).
+CASE_DISPLAY_NAMES = {
+    "BASE":       "No-PV Baseline",
+    "PRE_MATCH":  "PRE_MATCH (injection ceiling)",
+    "POST_MATCH": "POST_MATCH (with P2P injection)",
+}
+
 SELLERS = ["C", "D", "E", "F", "I"]
 BUYERS  = ["A", "B", "G", "H", "J"]
 
@@ -108,22 +116,29 @@ def run_case(
     seller_unsold_kwh: Optional[Dict[str, float]] = None,
 ) -> dict:
     """
-    mode = "BASE"       – every bus uses ACTUAL_LOAD_DATA; no DG
+    mode = "BASE"       – No-PV Baseline: every bus uses ACTUAL_LOAD_DATA (the
+                          measured / peak feeder load) and there is NO seller PV
+                          injection. The whole feeder is supplied by the grid.
+                          This is the voltage/loss reference case.
     mode = "PRE_MATCH"  – sellers inject at full capacity; no loads anywhere
-    mode = "POST_MATCH" – buyers keep their full ACTUAL_LOAD_DATA load (they still
-                          consume the same amount; the trade only changes the
-                          source from grid to peer PV). Sellers place no load and
-                          inject TWO separate sgen blocks:
+    mode = "POST_MATCH" – "POST_MATCH (with P2P injection)". Sellers place no load
+                          and inject TWO separate sgen blocks:
                             (1) P2P sold energy  (seller_sold_kwh)   -> DG_Seller{s}_P2P
                             (2) unsold residual  (seller_unsold_kwh) -> DG_Seller{s}_GRID
-                          The residual is the energy that could not be matched under
-                          the bid >= offer rule and is sold back to the grid at FIT.
-                          Injecting it physically can push total injection above the
-                          local load and create reverse power flow toward the grid;
-                          the metrics block below reports that explicitly. Other buses
-                          keep their ACTUAL_LOAD_DATA load.
-                          NOTE (provisional): selling the residual to the grid at FIT
-                          is a first-cut rule, to be refined later.
+                          so total injection = the seller energy the user entered.
+                          Each BUYER bus now carries a load equal to the demand the
+                          buyer entered (buyer_energy_kwh), NOT the fixed
+                          ACTUAL_LOAD_DATA value. Consequently the power flow reacts
+                          directly to the user's input and the comparison
+                            Σ injection (seller)  vs  Σ load (buyer demand)
+                          is what decides reverse power flow: inject > load pushes
+                          the surplus back toward the grid (is_reverse_to_grid), and
+                          the metrics block reports it explicitly.
+                          NOTE: the sold/unsold split is a settlement (economic)
+                          concept; physically the full seller energy is injected and
+                          the full buyer demand is drawn, with the grid balancing the
+                          difference. Selling the unsold residual to the grid at FIT
+                          is a provisional rule, to be refined later.
     mode = "BUYER_TEST" – mirror of PRE_MATCH for the buyer side: place a variable
                           load (buyer_energy_kwh) at each buyer bus, with no other
                           loads and no DG, then scale it up to find the
@@ -168,14 +183,19 @@ def run_case(
                       # sgen below and no load is placed here.
 
             elif bidx in buyer_bus:
-                # The buyer still consumes its full actual load. P2P trading only
-                # changes where that energy comes from (a peer's PV instead of the
-                # grid), not how much the buyer uses, so the load must remain in
-                # the power flow for the BASE and POST_MATCH cases to be comparable.
+                # POST_MATCH (with P2P injection): the buyer's PHYSICAL load is the
+                # demand it entered in the auction (buyer_energy_kwh), NOT the fixed
+                # ACTUAL_LOAD_DATA peak value. This makes the power flow respond to
+                # the user's input directly, so the on-screen comparison
+                #     Σ injection (seller) vs Σ load (buyer demand)
+                # is exactly what determines reverse flow / "inject > load".
+                # (ACTUAL_LOAD_DATA peak load is used only by the No-PV Baseline.)
                 buyer = buyer_bus[bidx]
-                pp.create_load(net, bus=bidx, p_mw=orig_p, q_mvar=orig_q,
-                               name=f"Load_Buyer{buyer}")
-                total_buyer_load += orig_p
+                p_mw = kwh_to_mw((buyer_energy_kwh or {}).get(buyer, 0.0))
+                if p_mw > 1e-12:
+                    pp.create_load(net, bus=bidx, p_mw=p_mw, q_mvar=0.0,
+                                   name=f"Load_Buyer{buyer}")
+                    total_buyer_load += p_mw
             else:
                 # Other buses (not a player): use actual measured load
                 pp.create_load(net, bus=bidx, p_mw=orig_p, q_mvar=orig_q,
@@ -686,6 +706,7 @@ def analyze():
             "pre_match":  pf_pre,
             "post_match": pf_post,
         },
+        "case_labels": CASE_DISPLAY_NAMES,
         "reverse_flow": reverse_flow_summary,
         "settlement":   settlement_summary,
     })

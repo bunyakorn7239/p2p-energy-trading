@@ -228,8 +228,10 @@ function runSimplifiedPowerFlow(busLoad) {
   const totalLoadMw = Object.values(busLoad).reduce((s, { pMw }) => s + Math.max(0, pMw), 0);
   // Total DG generated (MW) = sum of |negative pMw| entries  
   const totalSgenMw = Object.values(busLoad).reduce((s, { pMw }) => s + Math.max(0, -pMw), 0);
-  // Grid supply from slack (external grid), balancing load + losses - sgen
-  const gridSupplyMw = Math.max(0, totalLoadMw - totalSgenMw + totalLineLossMw);
+  // Grid supply from slack (external grid), balancing load + losses - sgen.
+  // NOTE: do NOT clamp to >= 0 — a negative value means surplus injection is
+  // pushed back toward the grid (reverse power flow), which must be preserved.
+  const gridSupplyMw = totalLoadMw - totalSgenMw + totalLineLossMw;
 
   // Bus voltages table (matches Python display_bus_voltages)
   const busVoltages = [

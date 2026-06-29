@@ -38,6 +38,15 @@ const PEAK_LOAD_KW = {
   C: 0.779, D: 1.169, E: 0.779, F: 1.169, I: 1.169,
 };
 
+// ── Display names for the three power-flow cases ────────────────────────────
+// Internal keys stay BASE / PRE_MATCH / POST_MATCH; these are what the UI shows.
+const CASE_LABELS = {
+  BASE: "No-PV Baseline",
+  PRE_MATCH: "PRE_MATCH (injection ceiling)",
+  POST_MATCH: "POST_MATCH (with P2P injection)",
+};
+const caseLabel = k => CASE_LABELS[k] || k;
+
 // ── State ──────────────────────────────────────────────────────────────────
 let state = {
   offeringPrice: { ...DEFAULT_OFFERING },
@@ -518,7 +527,6 @@ function buildInputSection() {
           step="0.01" min="0.01" value="${state.sellerKwh[s]}" oninput="onEnergyInput(this)">
         ${nw ? `<span class="nrg-warn" title="Exceeds recommended max">⚠️</span>` : ''}
       </td>
-      <td class="bus-cell">${(PEAK_LOAD_KW[s] ?? 0).toFixed(3)}</td>
     </tr>`;
   }).join('');
 
@@ -539,7 +547,17 @@ function buildInputSection() {
         <input type="number" id="benergy-${b}" class="tbl-input"
           step="0.01" min="0.01" value="${state.buyerKwh[b]}" oninput="onEnergyInput(this)">
       </td>
-      <td class="bus-cell">${(PEAK_LOAD_KW[b] ?? 0).toFixed(3)}</td>
+    </tr>`;
+  }).join('');
+
+  // Read-only rows for the No-PV Baseline block (peak load = ACTUAL_LOAD_DATA)
+  const baselineRows = [...SELLERS, ...BUYERS].map(p => {
+    const isSeller = SELLERS.includes(p);
+    return `<tr>
+      <td><span class="tag ${isSeller ? 'seller-tag' : 'buyer-tag'}">${p}</span></td>
+      <td class="bus-cell">${PLAYER_LOCATIONS[p]}</td>
+      <td class="role-cell ${isSeller ? 'seller-role' : 'buyer-role'}">${isSeller ? 'Seller' : 'Buyer'}</td>
+      <td class="bus-cell">${(PEAK_LOAD_KW[p] ?? 0).toFixed(3)}</td>
     </tr>`;
   }).join('');
 
@@ -577,6 +595,41 @@ function buildInputSection() {
         </div>
       </div>
 
+      <!-- ===== Block 1: No-PV Baseline (read-only peak load) ===== -->
+      <div class="case-block-title" style="margin:6px 0 8px;font-weight:700">
+        🔵 No-PV Baseline — Peak Load (ACTUAL_LOAD_DATA)
+      </div>
+      <p class="bulk-paste-help" style="margin:0 0 8px">
+        โหลดคงที่จากค่าที่วัดจริง ใช้รัน power flow กรณีอ้างอิง (ไม่มี PV ของผู้ขาย) — ค่าเหล่านี้แก้ไขไม่ได้
+      </p>
+      <div class="table-scroll" style="margin-bottom:18px">
+        <table class="input-unified-table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Bus</th>
+              <th>Role</th>
+              <th>Peak Load (kW)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${baselineRows}
+            <tr class="input-total-row" style="border-top:2px solid var(--border, #334155)">
+              <td colspan="3" style="text-align:right;font-weight:700">Σ Peak Load (No-PV Baseline)</td>
+              <td style="font-weight:700">${(sumSellerPeak + sumBuyerPeak).toFixed(3)} kW</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ===== Block 2: POST_MATCH (with P2P injection) — editable input ===== -->
+      <div class="case-block-title" style="margin:6px 0 8px;font-weight:700">
+        🟠 POST_MATCH (with P2P injection) — กรอก Price &amp; Energy เอง
+      </div>
+      <p class="bulk-paste-help" style="margin:0 0 8px">
+        ผู้ขายฉีด Σ Seller energy เป็น generation, ผู้ซื้อดึง Σ Buyer energy เป็นโหลด → ใช้ตัดสิน
+        <strong>inject vs load</strong> (Σ inject &gt; Σ load ⇒ คาดว่าเกิด reverse power flow)
+      </p>
       <div class="table-scroll" style="margin-bottom:16px">
         <table class="input-unified-table" id="input-unified-table">
           <thead>
@@ -586,27 +639,23 @@ function buildInputSection() {
               <th>Role</th>
               <th>Price (THB/kWh) [${FIT_PRICE}–${RETAIL_PRICE}]</th>
               <th>Energy (kWh)</th>
-              <th>Peak Load (kW)</th>
             </tr>
           </thead>
           <tbody>
             ${sellerRows}
             <tr class="input-total-row">
-              <td colspan="4" style="text-align:right;font-weight:600">Σ Seller (input)</td>
+              <td colspan="4" style="text-align:right;font-weight:600">Σ Seller energy (injection)</td>
               <td id="seller-energy-total" style="font-weight:600">${sumSellerKwh.toFixed(2)} kWh</td>
-              <td style="font-weight:600">${sumSellerPeak.toFixed(3)} kW</td>
             </tr>
-            <tr class="input-section-divider"><td colspan="6"></td></tr>
+            <tr class="input-section-divider"><td colspan="5"></td></tr>
             ${buyerRows}
             <tr class="input-total-row">
-              <td colspan="4" style="text-align:right;font-weight:600">Σ Buyer (input)</td>
+              <td colspan="4" style="text-align:right;font-weight:600">Σ Buyer energy (demand / load)</td>
               <td id="buyer-energy-total" style="font-weight:600">${sumBuyerKwh.toFixed(2)} kWh</td>
-              <td style="font-weight:600">${sumBuyerPeak.toFixed(3)} kW</td>
             </tr>
             <tr class="input-total-row" style="border-top:2px solid var(--border, #334155)">
-              <td colspan="4" style="text-align:right;font-weight:700">Σ รวมทั้งหมด (input / ACTUAL_LOAD_DATA)</td>
+              <td colspan="4" style="text-align:right;font-weight:700">Σ รวมทั้งหมด (input)</td>
               <td id="all-energy-total" style="font-weight:700">${(sumSellerKwh + sumBuyerKwh).toFixed(2)} kWh</td>
-              <td style="font-weight:700">${(sumSellerPeak + sumBuyerPeak).toFixed(3)} kW</td>
             </tr>
           </tbody>
         </table>
@@ -919,15 +968,15 @@ function renderDashboard() {
       <div class="kpi-card kpi-orange"><div class="kpi-icon">🌞</div>
         <div class="kpi-label">DG Injection (POST)</div>
         <div class="kpi-value">${f6(pfPost?.metrics?.total_dg_mw || 0)} <span class="kpi-unit">MW</span></div>
-        <div class="kpi-sub">BASE: 0 MW (no DG)</div></div>
+        <div class="kpi-sub">No-PV Baseline: 0 MW</div></div>
       <div class="kpi-card kpi-teal"><div class="kpi-icon">📉</div>
         <div class="kpi-label">Total Loss (POST)</div>
         <div class="kpi-value">${fKw(pfPost?.metrics?.total_loss_mw || 0)} <span class="kpi-unit">kW</span></div>
-        <div class="kpi-sub">BASE: ${fKw(pfBase?.metrics?.total_loss_mw || 0)} kW</div></div>
+        <div class="kpi-sub">No-PV Baseline: ${fKw(pfBase?.metrics?.total_loss_mw || 0)} kW</div></div>
       <div class="kpi-card kpi-indigo"><div class="kpi-icon">🔌</div>
         <div class="kpi-label">Min Voltage (POST)</div>
         <div class="kpi-value">${f6(pfPost?.metrics?.min_voltage_pu || 0)} <span class="kpi-unit">p.u.</span></div>
-        <div class="kpi-sub">BASE: ${f6(pfBase?.metrics?.min_voltage_pu || 0)} p.u.</div></div>
+        <div class="kpi-sub">No-PV Baseline: ${f6(pfBase?.metrics?.min_voltage_pu || 0)} p.u.</div></div>
     </div>
 
     <div class="dash-section">
@@ -1213,7 +1262,7 @@ function renderPfStatusCard(pfBase, pfPre, pfPost) {
   const cases = [checkCase(pfBase, "BASE"), checkCase(pfPre, "PRE_MATCH"), checkCase(pfPost, "POST_MATCH")];
   const rows = cases.map(c => `
     <div class="pf-status-row">
-      <span class="pf-status-label">${c.label === "BASE" ? "🔵" : c.label === "PRE_MATCH" ? "🟡" : "🟠"} ${c.label}</span>
+      <span class="pf-status-label">${c.label === "BASE" ? "🔵" : c.label === "PRE_MATCH" ? "🟡" : "🟠"} ${caseLabel(c.label)}</span>
       <span class="pf-status-badge ${c.pass ? "badge-pass" : "badge-fail"}">${c.pass ? "✅ PASS" : "❌ FAIL"}</span>
       <span class="pf-status-detail">${c.detail}</span>
     </div>`).join("");
@@ -1252,16 +1301,16 @@ function renderPowerFlow() {
 
   el.innerHTML = `
     <div class="pf-section">
-      <h3>📊 System Metrics — BASE &amp; POST_MATCH (pandapower AC Power Flow)</h3>
+      <h3>📊 System Metrics — No-PV Baseline &amp; POST_MATCH (with P2P injection) (pandapower AC Power Flow)</h3>
       <p class="algo-note">Newton-Raphson AC power flow via pandapower | IEEE 33-bus | 0.4 kV LV network with 22 kV/0.4 kV transformer</p>
       ${renderPfStatusCard(pfBase, pfPre, pfPost)}
       ${renderMetricsTable2(pfBase, pfPost)}
       ${renderHouseConsumptionTable()}
       <div class="pf-case-tabs" style="margin-top:24px">
         <div class="pf-tab-bar">
-          <button class="pf-tab-btn ${wf.pfTab === "base" ? "active" : ""}"  onclick="setPfTab('base')">🔵 BASE</button>
+          <button class="pf-tab-btn ${wf.pfTab === "base" ? "active" : ""}"  onclick="setPfTab('base')">🔵 No-PV Baseline</button>
           <button class="pf-tab-btn ${wf.pfTab === "pre" ? "active" : ""}"  onclick="setPfTab('pre')">🟡 PRE_MATCH</button>
-          <button class="pf-tab-btn ${wf.pfTab === "post" ? "active" : ""}"  onclick="setPfTab('post')">🟠 POST_MATCH</button>
+          <button class="pf-tab-btn ${wf.pfTab === "post" ? "active" : ""}"  onclick="setPfTab('post')">🟠 POST_MATCH (with P2P injection)</button>
           <button class="pf-tab-btn ${wf.pfTab === "comp" ? "active" : ""}"  onclick="setPfTab('comp')">📈 Comparison</button>
         </div>
         <div id="pf-case-content"></div>
@@ -1283,11 +1332,11 @@ function renderPfCaseContent() {
   if (!el) return;
   const { pfBase, pfPre, pfPost } = R;
   switch (wf.pfTab) {
-    case "base": el.innerHTML = renderCaseDetail(pfBase, "BASE", "base-accent"); break;
-    case "pre": el.innerHTML = renderCaseDetail(pfPre, "PRE_MATCH", "post-accent"); break;
-    case "post": el.innerHTML = renderCaseDetail(pfPost, "POST_MATCH", "post-accent"); break;
+    case "base": el.innerHTML = renderCaseDetail(pfBase, caseLabel("BASE"), "base-accent"); break;
+    case "pre": el.innerHTML = renderCaseDetail(pfPre, caseLabel("PRE_MATCH"), "post-accent"); break;
+    case "post": el.innerHTML = renderCaseDetail(pfPost, caseLabel("POST_MATCH"), "post-accent"); break;
     case "comp": el.innerHTML = renderComparison2(pfBase, pfPost); break;
-    default: el.innerHTML = renderCaseDetail(pfBase, "BASE", "base-accent"); break;
+    default: el.innerHTML = renderCaseDetail(pfBase, caseLabel("BASE"), "base-accent"); break;
   }
   requestAnimationFrame(() => { drawVoltageChart2(pfBase, pfPost); drawLineLoadingChart(pfBase, pfPost); });
 }
@@ -1331,6 +1380,7 @@ function renderCaseDetail(pf, label, accentClass) {
           <div class="pf-sys-stat"><span>Total Load Demand</span><strong>${f6((m.total_load_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Total DG (sgen)</span><strong>${f6((m.total_sgen_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Grid Supply</span><strong>${f6((m.grid_supply_mw || 0) * 1000)} kW</strong></div>
+          ${(m.total_sgen_mw || 0) > 1e-9 ? `<div class="pf-sys-stat" style="grid-column:1/-1"><span>Inject vs Load</span><strong style="color:${(m.total_sgen_mw || 0) > (m.total_load_mw || 0) ? "#ef4444" : "#16a34a"}">Σ inject ${f6((m.total_sgen_mw || 0) * 1000)} kW ${(m.total_sgen_mw || 0) > (m.total_load_mw || 0) ? ">" : "≤"} Σ load ${f6((m.total_load_mw || 0) * 1000)} kW → ${(m.total_sgen_mw || 0) > (m.total_load_mw || 0) ? "inject &gt; load (คาดว่าเกิด reverse to grid)" : "inject ≤ load (ไม่เกิด reverse)"}</strong></div>` : ""}
           <div class="pf-sys-stat"><span>Line Losses</span><strong>${f6((m.line_loss_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Trafo Losses</span><strong>${f6((m.trafo_loss_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Total Losses</span><strong>${f6((m.total_loss_mw || 0) * 1000)} kW (${f4(loss_pct)} %)</strong></div>
@@ -1355,7 +1405,7 @@ function renderCaseDetail(pf, label, accentClass) {
           <div style="margin-top:8px;font-size:.86rem;line-height:1.5">
             ▸ <strong>ย้อนออกกริดที่:</strong> Bus ${m.grid_bus ?? 0} (กริดหลัก/slack) ผ่านหม้อแปลง ↑ จาก Bus ${m.pcc_bus ?? 1} (จุดเชื่อมต่อ PCC)<br>
             ▸ <strong>ปริมาณย้อนออก:</strong> ${f6((m.grid_export_mw || 0) * 1000)} kW
-            &nbsp;(BASE กริดจ่ายเข้า ${f6((R?.pfBase?.metrics?.grid_supply_mw || 0) * 1000)} kW → POST ${f6((m.grid_supply_mw || 0) * 1000)} kW)
+            &nbsp;(No-PV Baseline กริดจ่ายเข้า ${f6((R?.pfBase?.metrics?.grid_supply_mw || 0) * 1000)} kW → POST ${f6((m.grid_supply_mw || 0) * 1000)} kW)
           </div>` : `
           <div style="margin-top:8px;font-size:.86rem">
             กรณีนี้ <strong>ยังไม่ย้อนออกกริด</strong> (กริดยังจ่ายเข้า ${f6((m.grid_supply_mw || 0) * 1000)} kW) แต่มีไฟย้อนภายในสายด้านล่าง
@@ -1516,8 +1566,8 @@ function renderMetricsTable2(pfBase, pfPost) {
   };
   return `
     <div class="table-scroll"><table class="data-table">
-      <thead><tr><th>Metric</th><th>🔵 BASE</th><th>🟠 POST_MATCH</th>
-        <th>Δ POST–BASE</th></tr></thead>
+      <thead><tr><th>Metric</th><th>🔵 No-PV Baseline</th><th>🟠 POST_MATCH (with P2P injection)</th>
+        <th>Δ POST–Baseline</th></tr></thead>
       <tbody>${rows.map(r => {
     const b = bm[r.key] ?? 0, po = pom[r.key] ?? 0;
     return `<tr><td><strong>${r.label}</strong></td>
