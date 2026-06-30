@@ -967,8 +967,8 @@ function renderDashboard() {
         <div class="kpi-sub">Avg ${f4(totalTraded > 0 ? totalValue / totalTraded : 0)} THB/kWh</div></div>
       <div class="kpi-card kpi-orange"><div class="kpi-icon">🌞</div>
         <div class="kpi-label">DG Injection (POST)</div>
-        <div class="kpi-value">${f6(pfPost?.metrics?.total_dg_mw || 0)} <span class="kpi-unit">MW</span></div>
-        <div class="kpi-sub">No-PV Baseline: 0 MW</div></div>
+        <div class="kpi-value">${fKw(pfPost?.metrics?.total_dg_mw || 0)} <span class="kpi-unit">kW</span></div>
+        <div class="kpi-sub">No-PV Baseline: 0 kW</div></div>
       <div class="kpi-card kpi-teal"><div class="kpi-icon">📉</div>
         <div class="kpi-label">Total Loss (POST)</div>
         <div class="kpi-value">${fKw(pfPost?.metrics?.total_loss_mw || 0)} <span class="kpi-unit">kW</span></div>
@@ -1385,8 +1385,8 @@ function renderCaseDetail(pf, label, accentClass) {
           <div class="pf-sys-stat"><span>Trafo Losses</span><strong>${f6((m.trafo_loss_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Total Losses</span><strong>${f6((m.total_loss_mw || 0) * 1000)} kW (${f4(loss_pct)} %)</strong></div>
           <div class="pf-sys-stat"><span>Max Line Loading</span><strong style="${(m.max_line_loading_pct || 0) > 100 ? "color:#ef4444" : ""}">${f6(m.max_line_loading_pct || 0)} %${(m.max_line_loading_pct || 0) > 100 ? " ⚠️" : ""}</strong></div>
-          <div class="pf-sys-stat"><span>Total DG Injection</span><strong>${f8(m.total_dg_mw || 0)} MW</strong></div>
-          <div class="pf-sys-stat"><span>Total Buyer Load</span><strong>${f8(m.total_buyer_load_mw || 0)} MW</strong></div>
+          <div class="pf-sys-stat"><span>Total DG Injection</span><strong>${f6((m.total_dg_mw || 0) * 1000)} kW</strong></div>
+          <div class="pf-sys-stat"><span>Total Buyer Load</span><strong>${f6((m.total_buyer_load_mw || 0) * 1000)} kW</strong></div>
           <div class="pf-sys-stat"><span>Reactive Losses</span><strong>${f6((m.total_loss_mvar || 0) * 1000)} kVAR</strong></div>
           ${(m.total_dg_grid_mw || 0) > 1e-9 ? `<div class="pf-sys-stat"><span>DG: P2P / Grid-export</span><strong>${f6((m.total_dg_p2p_mw || 0) * 1000)} / ${f6((m.total_dg_grid_mw || 0) * 1000)} kW</strong></div>` : ""}
           <div class="pf-sys-stat"><span>Reverse to Grid</span><strong style="${m.is_reverse_to_grid ? "color:#ef4444" : ""}">${m.is_reverse_to_grid ? `ใช่ — export ${f6((m.grid_export_mw || 0) * 1000)} kW ⚠️` : "ไม่ (grid ยังจ่ายเข้า)"}</strong></div>
@@ -1548,31 +1548,32 @@ function renderCaseDetail(pf, label, accentClass) {
 
 // Metrics comparison table — BASE vs POST_MATCH only
 function renderMetricsTable2(pfBase, pfPost) {
+  // scale = ตัวคูณก่อนแสดงผล (MW → kW ใช้ 1000) ค่าใน metrics ยังเก็บเป็น MW เหมือนเดิม
   const rows = [
-    { label: "Min Voltage (p.u.)", key: "min_voltage_pu", fmt: f8 },
-    { label: "Max Voltage (p.u.)", key: "max_voltage_pu", fmt: f8 },
-    { label: "Total Loss (MW)", key: "total_loss_mw", fmt: f8 },
-    { label: "Grid Supply (MW)", key: "grid_supply_mw", fmt: f8 },
-    { label: "Max Line Loading (%)", key: "max_line_loading_pct", fmt: f8 },
-    { label: "Total DG Injection (MW)", key: "total_dg_mw", fmt: f8 },
-    { label: "Total Buyer Load (MW)", key: "total_buyer_load_mw", fmt: f8 },
-    { label: "Loss Percent (%)", key: "loss_pct", fmt: f4 },
+    { label: "Min Voltage (p.u.)", key: "min_voltage_pu", fmt: f8, scale: 1 },
+    { label: "Max Voltage (p.u.)", key: "max_voltage_pu", fmt: f8, scale: 1 },
+    { label: "Total Loss (kW)", key: "total_loss_mw", fmt: f4, scale: 1000 },
+    { label: "Grid Supply (kW)", key: "grid_supply_mw", fmt: f4, scale: 1000 },
+    { label: "Max Line Loading (%)", key: "max_line_loading_pct", fmt: f8, scale: 1 },
+    { label: "Total DG Injection (kW)", key: "total_dg_mw", fmt: f4, scale: 1000 },
+    { label: "Total Buyer Load (kW)", key: "total_buyer_load_mw", fmt: f4, scale: 1000 },
+    { label: "Loss Percent (%)", key: "loss_pct", fmt: f4, scale: 1 },
   ];
   const bm = pfBase?.metrics || {}, pom = pfPost?.metrics || {};
-  const delta = (a, b) => {
-    const d = b - a;
+  const delta = (d, fmt) => {
     const cls = Math.abs(d) < 1e-12 ? "" : d < 0 ? "pos" : "neg";
-    return `<span class="${cls}">${d >= 0 ? "+" : ""}${f8(d)}</span>`;
+    return `<span class="${cls}">${d >= 0 ? "+" : ""}${fmt(d)}</span>`;
   };
   return `
     <div class="table-scroll"><table class="data-table">
       <thead><tr><th>Metric</th><th>🔵 No-PV Baseline</th><th>🟠 POST_MATCH (with P2P injection)</th>
         <th>Δ POST–Baseline</th></tr></thead>
       <tbody>${rows.map(r => {
-    const b = bm[r.key] ?? 0, po = pom[r.key] ?? 0;
+    const sc = r.scale ?? 1;
+    const b = (bm[r.key] ?? 0) * sc, po = (pom[r.key] ?? 0) * sc;
     return `<tr><td><strong>${r.label}</strong></td>
           <td>${r.fmt(b)}</td><td>${r.fmt(po)}</td>
-          <td>${delta(b, po)}</td></tr>`;
+          <td>${delta(po - b, r.fmt)}</td></tr>`;
   }).join("")}</tbody>
     </table></div>`;
 }
