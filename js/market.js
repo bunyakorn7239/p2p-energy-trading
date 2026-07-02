@@ -223,53 +223,15 @@
     if (tabId === "market") renderMarket();
   };
 
-  // ── Re-label the energy-range panel: per-slot + reverse-flow / over-voltage ────
-  window.renderEnergyRangeBanner = function () {
-    const el = g("energy-range-banner");
-    if (!el) return;
-    const er = (typeof wf !== "undefined") ? wf.energyRange : null;
-    if (!er) { el.innerHTML = `<div class="era-loading">⏳ Loading energy range from backend…</div>`; return; }
-    const maxS = er.max_kwh_per_seller != null ? er.max_kwh_per_seller.toLocaleString() : "—";
-    const maxSTot = er.max_kwh_total_seller != null ? er.max_kwh_total_seller.toLocaleString() : "—";
-    const maxB = er.max_kwh_per_buyer != null ? er.max_kwh_per_buyer.toLocaleString() : "—";
-    const maxBTot = er.max_kwh_total_buyer != null ? er.max_kwh_total_buyer.toLocaleString() : "—";
-    // mode-aware labels / numbers (driven by backend energy_range response)
-    const reverseMode = !!er.allow_reverse_flow;
-    const capLabel = reverseMode ? "(over-voltage limit)" : "(no reverse flow)";
-    const reliefTot = (er.relief_total ?? er.load_cap_total ?? 15.55);
-    const hardTot = (er.hard_total ?? 61.79);
-    el.innerHTML = `
-      <div class="era-card">
-        <div class="era-title">⚡ Power Flow Feasibility (pandapower AC) — เพดานพลังงานต่อ slot (1 ชม.)</div>
-        <div class="era-grid">
-          <div class="era-stat"><span class="era-label">Min / Seller</span>
-            <span class="era-value green">0 kWh</span></div>
-          <div class="era-stat"><span class="era-label">Max / Seller <span style="font-size:0.75em;opacity:0.8">${capLabel}</span></span>
-            <span class="era-value orange">${maxS} kWh</span></div>
-          <div class="era-stat"><span class="era-label">Max Seller Total</span>
-            <span class="era-value blue">${maxSTot} kWh</span></div>
-          <div class="era-stat"><span class="era-label">Limits</span>
-            <span class="era-value" style="font-size:0.8em">V 0.95–1.05 p.u.<br>line loading ≤ 100%</span></div>
-
-          <div class="era-stat"><span class="era-label">Min / Buyer</span>
-            <span class="era-value green">0 kWh</span></div>
-          <div class="era-stat"><span class="era-label">Max / Buyer <span style="font-size:0.75em;opacity:0.8">${capLabel}</span></span>
-            <span class="era-value orange">${maxB} kWh</span></div>
-          <div class="era-stat"><span class="era-label">Max Buyer Total</span>
-            <span class="era-value blue">${maxBTot} kWh</span></div>
-          <div class="era-stat"></div>
-        </div>
-        <div class="era-note">
-          <strong>ℹ️ ${er.feasibility_note || ""}</strong><br>
-          <span style="font-size:0.9em; opacity:0.9;">
-            *หมายเหตุ: ค่าเป็นพลังงานต่อ slot 1 ชม. (ENERGY_WINDOW = 1.0) — โหมด grid-relief จำกัด inject รวม ≤ โหลด buyer ≈${reliefTot} kW เพื่อไม่ให้ไฟย้อนกริด ค่าที่แสดงจึงเป็นเพดาน reverse-flow ไม่ใช่ line loading. หลังลดพิกัดสายเป็น 0.34/3 kA และเพิ่ม impedance ×3 ถ้าดัน inject เข้าโหมด reverse flow ตัวที่ชนก่อนคือ <b>over-voltage</b> (Vmax แตะ 1.05 ที่ ≈${hardTot} kW รวม) ส่วน line loading ถึง 100% ต้องใช้ ~100 kW ดังนั้นเพดานแข็งคุมด้วย over-voltage ไม่ใช่ line loading.
-          </span>
-        </div>
-        <div class="era-warning">⚠️ inject เกินโหลด buyer (≈${reliefTot} kW) จะเริ่มไฟย้อนกริด แล้วถ้าดันต่อจะชน <b>over-voltage</b> (Vmax > 1.05) ก่อน line loading · ปรับ input ไม่ให้เกินเพดานต่อ slot</div>
-      </div>`;
-  };
-
-  // If the inputs tab is already on screen, refresh the banner with new labels.
-  if (g("energy-range-banner")) window.renderEnergyRangeBanner();
+  // ── Energy-range banner ────────────────────────────────────────────────────
+  // NOTE (fix): this file used to OVERRIDE window.renderEnergyRangeBanner with an
+  // old 4-cell layout (Min / Max / Total / Limits). Because market.js loads AFTER
+  // app.js, that override hid the labelled banner in app.js (ปลอดภัย 3.11 เขียว /
+  // real edge 3.16 ส้ม / hard limit 12.35 แดง). The override has been REMOVED so
+  // the single source of truth is renderEnergyRangeBanner() in app.js.
+  // If the inputs tab is already on screen, refresh it with the app.js banner.
+  if (g("energy-range-banner") && typeof window.renderEnergyRangeBanner === "function") {
+    window.renderEnergyRangeBanner();
+  }
 
 })();

@@ -429,8 +429,17 @@ def health():
 # ----------------------------------------------------------------------------
 _DEFAULT_ER = {
     "load_cap_total":           15.55,   # op_total = buyer physical load
-    "relief_total":             15.55,   # grid-relief cap (no reverse flow)
-    "relief_per":               3.11,
+    "relief_total":             15.55,   # grid-relief cap (no reverse flow) = Σload
+    "relief_per":               3.11,    # = 15.55 / 5  (SAFE: Σinject = Σload)
+    # Real edge before reverse power flow. Because the network losses (~0.28 kW)
+    # must also be supplied before power flows back to the grid, the true no-reverse
+    # limit is Σinject <= Σload + loss (grid_supply >= 0), NOT Σinject <= Σload.
+    #   reverse_edge_per   = largest per-seller step (2-dp) still pre-reverse
+    #   reverse_edge_total = 3.16 x 5 = 15.80  (grid_supply ~ +0.03 kW, still import)
+    #   reverse_onset_total= exact onset where grid_supply = 0 (= Σload + loss)
+    "reverse_edge_per":         3.16,
+    "reverse_edge_total":       15.80,
+    "reverse_onset_total":      15.83,
     "hard_total_premaatch":     54.31,   # PRE_MATCH hard limit (reference)
     "hard_total":               61.79,   # POST_MATCH hard limit (real edge)
     "hard_per":                 12.35,   # = 61.79 / 5 (safe input ceiling 12.3)
@@ -446,13 +455,19 @@ def _is_default(sellers, buyers, player_locations):
             player_locations == PLAYER_LOCATIONS)
 
 def _build_response(relief_per, relief_total, hard_per, hard_total,
-                    op_total, allow_reverse, extra=None):
+                    op_total, allow_reverse,
+                    reverse_edge_per=None, reverse_edge_total=None,
+                    reverse_onset_total=None, extra=None):
     if allow_reverse:
         cap_per, cap_total = hard_per, hard_total
         mode = "hosting-capacity (reverse flow allowed)"
     else:
         cap_per, cap_total = relief_per, relief_total
         mode = "grid-relief (no reverse flow)"
+    # Fall back to the safe (relief) values if the real edge was not supplied.
+    r_edge_per   = reverse_edge_per   if reverse_edge_per   is not None else relief_per
+    r_edge_total = reverse_edge_total if reverse_edge_total is not None else relief_total
+    r_onset_tot  = reverse_onset_total if reverse_onset_total is not None else r_edge_total
     out = {
         "allow_reverse_flow": allow_reverse,
         "mode": mode,
@@ -464,11 +479,19 @@ def _build_response(relief_per, relief_total, hard_per, hard_total,
         # both caps, always provided so a UI toggle needs no refetch:
         "relief_per": relief_per, "relief_total": relief_total,
         "hard_per": hard_per,     "hard_total": hard_total,
+        # SAFE (no reverse, Σinject <= Σload) vs REAL EDGE (Σinject <= Σload + loss):
+        "safe_per":    relief_per,   "safe_total":    relief_total,
+        "reverse_edge_per":    r_edge_per,   "reverse_edge_total": r_edge_total,
+        "reverse_onset_total": r_onset_tot,
         "load_cap_total": op_total,
         "min_kwh_per_seller": 0, "min_kwh_per_buyer": 0,
         "feasibility_note": (
-            f"{mode}: cap = {cap_total:.2f} kW total ({cap_per:.2f}/each). "
-            f"reverse-flow onset ~15.84 kW; hard over-voltage limit {hard_total:.2f} kW."
+            f"{mode}: active input cap = {cap_total:.2f} kW ({cap_per:.2f}/each). "
+            f"SAFE = {relief_total:.2f} kW total ({relief_per:.2f}/each, "
+            f"\u03a3inject = \u03a3load, no reverse guaranteed) \u00b7 "
+            f"real edge before reverse = {r_edge_total:.2f} kW ({r_edge_per:.2f}/each, "
+            f"\u03a3load + loss) \u00b7 reverse-flow onset ~{r_onset_tot:.2f} kW \u00b7 "
+            f"hard over-voltage limit {hard_total:.2f} kW ({hard_per:.2f}/each, Vmax = 1.05)."
         ),
     }
     if extra:
@@ -494,6 +517,9 @@ def energy_range():
         return jsonify(_build_response(
             d["relief_per"], d["relief_total"], d["hard_per"], d["hard_total"],
             d["load_cap_total"], allow_reverse,
+            reverse_edge_per=d["reverse_edge_per"],
+            reverse_edge_total=d["reverse_edge_total"],
+            reverse_onset_total=d["reverse_onset_total"],
             extra={"thermal_max_total_seller": d["thermal_max_total_seller"],
                    "thermal_max_total_buyer":  d["thermal_max_total_buyer"]}))
 
@@ -518,10 +544,34 @@ def energy_range():
             lo_s, hi_s = (mid, hi_s) if seller_ok(mid) else (lo_s, mid)
         op_total = sum(ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]), (0.0, 0.0))[0]
                        for b in buyers) * 1000.0
+        # Reverse-flow onset = Σload + loss (grid_supply = 0). A single POST_MATCH
+        # power flow at Σinject = Σload (all injection exported) gives the loss, so
+        # the UI can show the SAFE cap (Σinject<=Σload) vs the REAL edge before reverse.
+        onset_total = op_total
+        try:
+            per_inj   = op_total / n
+            buyer_kwh = {b: ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]),
+                                                 (0.0, 0.0))[0] * 1000.0 for b in buyers}
+            r2 = run_case("POST_MATCH", sellers, buyers, player_locations,
+                          seller_energy_kwh={s: per_inj for s in sellers},
+                          buyer_energy_kwh=buyer_kwh,
+                          seller_sold_kwh={s: 0.0 for s in sellers},
+                          buyer_bought_kwh={b: 0.0 for b in buyers},
+                          seller_unsold_kwh={s: per_inj for s in sellers})
+            if r2.get("converged"):
+                onset_total = op_total + r2["metrics"]["total_loss_mw"] * 1000.0
+        except Exception:
+            pass
+        edge_per   = int((onset_total / n) * 100) / 100.0   # floor to 2-dp (stay pre-reverse)
+        edge_total = round(edge_per * n, 2)
         _ER_CACHE[key] = (round(min(lo_s, op_total)/n, 2), round(min(lo_s, op_total), 2),
-                          round(lo_s/n, 2), round(lo_s, 2), round(op_total, 2))
-    rp, rt, hp, ht, op_total = _ER_CACHE[key]
-    return jsonify(_build_response(rp, rt, hp, ht, op_total, allow_reverse))
+                          round(lo_s/n, 2), round(lo_s, 2), round(op_total, 2),
+                          edge_per, edge_total, round(onset_total, 2))
+    rp, rt, hp, ht, op_total, r_edge_per, r_edge_total, r_onset_total = _ER_CACHE[key]
+    return jsonify(_build_response(rp, rt, hp, ht, op_total, allow_reverse,
+                                   reverse_edge_per=r_edge_per,
+                                   reverse_edge_total=r_edge_total,
+                                   reverse_onset_total=r_onset_total))
 
 
 @app.route("/api/powerflow_case", methods=["POST"])

@@ -382,45 +382,92 @@ function renderWorkflowBanner() {
 }
 
 // ── Energy Range Banner ──────────────────────────────────────────────────────
+// ============================================================================
+// renderEnergyRangeBanner()  —  Power Flow Feasibility banner (labelled)
+// Drop-in replacement. Self-contained (inline styles, no CSS-class dependency).
+// Reads wf.energyRange from /api/energy_range and labels every value:
+//   • ปลอดภัย (no reverse)         : Σinject ≤ Σload            → safe_per / safe_total
+//   • สูงสุดจริงก่อน reverse        : Σinject ≤ Σload + loss     → reverse_edge_per / _total (onset)
+//   • เพดานแข็ง over-voltage        : Vmax = 1.05               → hard_per / hard_total
+//   • เพดาน under-voltage (ผู้ซื้อ) : Vmin = 0.95               → thermal_max_total_buyer
+// ============================================================================
 function renderEnergyRangeBanner() {
   const el = document.getElementById("energy-range-banner");
   if (!el) return;
   const er = wf.energyRange;
-  if (!er) { el.innerHTML = `<div class="era-loading">⏳ Loading energy range from backend…</div>`; return; }
+  if (!er) { el.innerHTML = `<div style="opacity:.7;padding:14px;">⏳ Loading energy range from backend…</div>`; return; }
 
-  const maxS = er.max_kwh_per_seller !== undefined ? er.max_kwh_per_seller.toLocaleString() : "—";
-  const maxSTot = er.max_kwh_total_seller !== undefined ? er.max_kwh_total_seller.toLocaleString() : "—";
-  const maxB = er.max_kwh_per_buyer !== undefined ? er.max_kwh_per_buyer.toLocaleString() : "—";
-  const maxBTot = er.max_kwh_total_buyer !== undefined ? er.max_kwh_total_buyer.toLocaleString() : "—";
+  const num = (v) => (typeof v === "number" && isFinite(v));
+  const f = (v, d = 2) => (num(v) ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : "—");
+  const nB = (typeof BUYERS !== "undefined" && BUYERS.length) ? BUYERS.length : 5;
+
+  // ── values (backend fields + safe fallbacks) ──────────────────────────────
+  const safePer = num(er.safe_per) ? er.safe_per : (num(er.relief_per) ? er.relief_per : 3.11);
+  const safeTot = num(er.safe_total) ? er.safe_total : (num(er.relief_total) ? er.relief_total : 15.55);
+  const edgePer = num(er.reverse_edge_per) ? er.reverse_edge_per : 3.16;
+  const edgeTot = num(er.reverse_edge_total) ? er.reverse_edge_total : 15.80;
+  const onsetTot = num(er.reverse_onset_total) ? er.reverse_onset_total : 15.83;
+  const hardPer = num(er.hard_per) ? er.hard_per : 12.35;
+  const hardTot = num(er.hard_total) ? er.hard_total : 61.79;
+  const uvTot = num(er.thermal_max_total_buyer) ? er.thermal_max_total_buyer : 70.91;
+  const uvPer = uvTot / nB;
+
+  // ── small helpers to build a labelled value cell ──────────────────────────
+  const GREEN = "#22c55e", AMBER = "#f59e0b", RED = "#ef4444", BLUE = "#3b82f6", GREY = "#94a3b8";
+  // Each cell carries a coloured left border + coloured dot so the safety level
+  // is readable at a glance (🟢 ปลอดภัย · 🟠 real edge · 🔴 เพดานแข็ง · 🔵 limits).
+  const cell = (dot, label, value, unit, color, tag) => `
+    <div style="padding:10px 12px; border-radius:8px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-left:4px solid ${color};">
+      <div style="font-size:0.72em; letter-spacing:.04em; color:${GREY}; text-transform:uppercase; margin-bottom:3px;">${dot} ${label}</div>
+      <div style="font-size:1.5em; font-weight:800; color:${color}; line-height:1.05;">${value}<span style="font-size:0.42em; font-weight:600; color:${GREY};"> ${unit}</span></div>
+      <div style="font-size:0.78em; color:#cbd5e1; margin-top:3px;">${tag}</div>
+    </div>`;
 
   el.innerHTML = `
-    <div class="era-card">
-      <div class="era-title">⚡ Power Flow Feasibility (pandapower AC) — Recommended Energy Range</div>
-      <div class="era-grid">
-        <div class="era-stat"><span class="era-label">Min / Seller</span>
-          <span class="era-value green">0 kWh</span></div>
-        <div class="era-stat"><span class="era-label">Max / Seller <span style="font-size:0.75em;opacity:0.8">(Overvoltage)</span></span>
-          <span class="era-value orange">${maxS} kWh</span></div>
-        <div class="era-stat"><span class="era-label">Max Seller Total</span>
-          <span class="era-value blue">${maxSTot} kWh</span></div>
-        <div class="era-stat"><span class="era-label">Voltage limits</span>
-          <span class="era-value">0.95–1.05 p.u.</span></div>
+    <div style="padding:16px 18px; border-radius:12px; background:rgba(15,27,45,0.6); border:1px solid rgba(255,255,255,0.10);">
+      <div style="font-weight:700; font-size:1.12em; margin-bottom:14px; color:#e2e8f0;">
+        ⚡ Power Flow Feasibility (pandapower AC) — เพดานพลังงานต่อ slot (1 ชม.)
+      </div>
 
-        <div class="era-stat"><span class="era-label">Min / Buyer</span>
-          <span class="era-value green">0 kWh</span></div>
-        <div class="era-stat"><span class="era-label">Max / Buyer <span style="font-size:0.75em;opacity:0.8">(Undervoltage)</span></span>
-          <span class="era-value orange">${maxB} kWh</span></div>
-        <div class="era-stat"><span class="era-label">Max Buyer Total</span>
-          <span class="era-value blue">${maxBTot} kWh</span></div>
-        <div class="era-stat"></div>
+      <!-- ─────────── SELLER (ผู้ขาย — ฉีดไฟเข้า) ─────────── -->
+      <div style="font-weight:700; color:#93c5fd; margin:4px 0 8px;">🔆 ผู้ขาย (Seller — ฉีดไฟเข้าระบบ)</div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px;">
+        ${cell("⚪", "Min / Seller", "0", "kWh", GREY, "ต่ำสุด — ไม่ฉีดไฟ")}
+        ${cell("🟢", "ปลอดภัย (No Reverse)", f(safePer), "kWh/ราย", GREEN, `รวม ${f(safeTot)} kWh · <code>Σinject = Σload</code>`)}
+        ${cell("🟠", "สูงสุดจริงก่อน Reverse", f(edgePer), "kWh/ราย", AMBER, `รวม ${f(edgeTot)} kWh · <code>Σload + loss</code> (onset ≈ ${f(onsetTot)})`)}
+        ${cell("🔴", "เพดานแข็ง Over-voltage", f(hardPer), "kWh/ราย", RED, `รวม ${f(hardTot)} kWh · <code>Vmax = 1.05 p.u.</code>`)}
       </div>
-      <div class="era-note">
-        <strong>ℹ️ ${er.feasibility_note}</strong><br>
-        <span style="font-size:0.9em; color:#ff5252; opacity:0.9;">
-          *หมายเหตุ: ค่าเหล่านี้มาจากระบบจำลองสถานการณ์สุดขั้ว (PRE_MATCH) โดยสั่งให้ผู้ขายทั้ง 5 ราย "ผลิตไฟเต็มพิกัดแล้วอัดเข้าไปในสายส่งพร้อมๆ กัน" โดยห้ามไม่ให้มีผู้ซื้อมาช่วยดึงไฟออกไปใช้เลย (มีแต่คนฉีดไฟเข้า แต่ไม่มีโหลดดูดไฟออก ไฟทั้งหมดจึงต้องวิ่งไปที่ Slack Bus ทำให้แรงดันทะลุ 1.05 p.u.) เพื่อหาเพดานความจุสูงสุดของสายส่ง แต่ในความเป็นจริงเมื่อมีการจับคู่ ผู้ซื้อจะช่วยดึงไฟไปใช้ในพื้นที่ ทำให้ระบบมักจะสามารถรองรับตัวเลขพลังงานที่สูงกว่าขีดจำกัดนี้ได้โดยไม่เกิน 1.05 p.u.
-        </span>
+
+      <!-- ─────────── BUYER (ผู้ซื้อ — ใช้ไฟ) ─────────── -->
+      <div style="font-weight:700; color:#fca5a5; margin:4px 0 8px;">🏠 ผู้ซื้อ (Buyer — ดึงไฟไปใช้)</div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px;">
+        ${cell("⚪", "Min / Buyer", "0", "kWh", GREY, "ต่ำสุด — ไม่ใช้ไฟ")}
+        ${cell("🟢", "ปลอดภัย (No Reverse)", f(safePer), "kWh/ราย", GREEN, `รวม ${f(safeTot)} kWh · <code>Σload = Σinject</code>`)}
+        ${cell("🔴", "เพดาน Under-voltage", f(uvPer), "kWh/ราย", RED, `รวม ${f(uvTot)} kWh · <code>Vmin = 0.95 p.u.</code>`)}
+        ${cell("🔵", "Limits", "0.95–1.05", "p.u.", BLUE, "line loading ≤ 100%")}
       </div>
-      <div class="era-warning">⚠️ Energy exceeding limits triggers overvoltage/undervoltage violations. Inputs are currently restricted to these strict bounds for maximum safety.</div>
+
+      <!-- ─────────── legend for the colour code ─────────── -->
+      <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:0.82em; color:#cbd5e1; margin-bottom:12px;">
+        <span><span style="color:${GREEN};font-weight:700;">●</span> ปลอดภัย — <code>Σinject = Σload</code> ไม่ย้อนกริดแน่นอน (ค่าที่ระบบใช้เป็นเพดาน input)</span>
+        <span><span style="color:${AMBER};font-weight:700;">●</span> ทนได้จริงก่อน reverse — loss ของสาย (~0.28 kW) ต้องถูกจ่ายก่อน ไฟจึงยังไม่ย้อน</span>
+        <span><span style="color:${RED};font-weight:700;">●</span> เพดานแข็ง — แรงดันหลุดกรอบ 0.95–1.05 p.u.</span>
+        <span><span style="color:${BLUE};font-weight:700;">●</span> กรอบมาตรฐานของระบบ</span>
+      </div>
+
+      <div style="font-size:0.9em; color:#cbd5e1; line-height:1.55; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <strong style="color:#e2e8f0;">ℹ️ ${er.feasibility_note || ""}</strong><br>
+        <span style="opacity:0.9;">
+          *หมายเหตุ: ค่าเป็นพลังงานต่อ slot 1 ชม. (ENERGY_WINDOW = 1.0) —
+          <span style="color:${GREEN};">${f(safePer)} kWh/ราย คือค่า "ปลอดภัย"</span> (Σinject = Σload พอดี ไม่มีทางย้อนกริด)
+          แต่<span style="color:${AMBER};">ค่าที่ระบบทนได้จริงคือ ${f(edgePer)} kWh/ราย (รวม ${f(edgeTot)} kW)</span>
+          เพราะ loss ในสายต้องถูกจ่ายด้วย — ไฟจะเริ่มย้อนกริดจริงที่ Σinject ≈ ${f(onsetTot)} kW (= Σload + loss).
+          หลังลดพิกัดสายเป็น 0.34/3 kA และเพิ่ม impedance ×3 ถ้าดัน inject เข้าโหมด reverse flow ตัวที่ชนก่อนคือ
+          <b style="color:${RED};">over-voltage</b> (Vmax แตะ 1.05 ที่ ≈ ${f(hardTot)} kW รวม)
+          ส่วน line loading ถึง 100% ต้องใช้ ~100 kW ดังนั้นเพดานแข็งคุมด้วย over-voltage ไม่ใช่ line loading.
+        </span><br>
+        <span style="color:#f59e0b;">⚠️ inject เกิน ${f(edgeTot)} kW (≈ ${f(onsetTot)} kW = Σload + loss) จะเริ่มไฟย้อนกริด · ถ้าดันต่อจะชน <strong>over-voltage (Vmax &gt; 1.05)</strong> ที่ ≈ ${f(hardTot)} kW ก่อน line loading → ปรับ input แต่ละรายไม่ให้เกิน ${f(safePer)} kWh (ปลอดภัย) หรืออย่างมาก ${f(edgePer)} kWh (edge)</span>
+      </div>
     </div>`;
 }
 
