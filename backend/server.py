@@ -304,6 +304,24 @@ def run_case(
         ql_mvar = float(net.res_trafo.at[i, "ql_mvar"])
         total_trafo_loss_mw   += pl_mw
         total_trafo_loss_mvar += ql_mvar
+
+        # ── Through-power at the HV (grid) side + rating comparison ────────────
+        # p_hv_mw is signed: positive = power flows grid → feeder (import);
+        # negative = power flows feeder → grid (reverse power flow / RPF).
+        # loading_percent (pandapower) is |S|/sn_mva*100 — a magnitude, so it does
+        # NOT reveal direction on its own; the sign of p_hv_mw does.
+        p_hv_mw    = float(net.res_trafo.at[i, "p_hv_mw"])
+        q_hv_mvar  = float(net.res_trafo.at[i, "q_hv_mvar"])
+        sn_mva     = float(net.trafo.at[i, "sn_mva"])
+        s_hv_mva   = (p_hv_mw ** 2 + q_hv_mvar ** 2) ** 0.5   # apparent power through trafo
+        sn_kva     = sn_mva * 1000.0
+        is_reverse = p_hv_mw < -1e-9
+        # RPF magnitude = active power pushed back toward the grid (0 when importing)
+        rpf_kw     = (abs(p_hv_mw) * 1000.0) if is_reverse else 0.0
+        # "RPF = X kW vs rating 100 kVA = Y %": active-power-over-rating ratio,
+        # exactly the comparison requested for the RPF-vs-design-rating check.
+        rpf_pct    = (abs(p_hv_mw) / sn_mva * 100.0) if sn_mva > 1e-12 else 0.0
+
         trafo_results.append({
             "trafoIdx":   int(i),
             "hvBus":      int(net.trafo.at[i, "hv_bus"]),
@@ -313,6 +331,15 @@ def run_case(
             "qlMvar":     round(ql_mvar, 8),
             "plKw":       round(pl_mw * 1000, 6),
             "qlKvar":     round(ql_mvar * 1000, 6),
+            # ── NEW: direction + through-power + rating comparison ────────────
+            "pHvKw":            round(p_hv_mw * 1000, 6),   # signed (+import / −reverse)
+            "qHvKvar":          round(q_hv_mvar * 1000, 6),
+            "sThroughKva":      round(s_hv_mva * 1000, 6),  # |S| crossing the trafo
+            "snKva":            round(sn_kva, 6),           # transformer rating (100 kVA)
+            "isReverse":        bool(is_reverse),           # True = RPF to grid
+            "rpfKw":            round(rpf_kw, 6),            # active power reversed
+            "rpfPctOfRating":   round(rpf_pct, 4),          # RPF kW / rating kVA * 100
+            "loadHeadroomKva":  round(sn_kva - s_hv_mva * 1000, 6),  # margin left
         })
 
     # ── Metrics ───────────────────────────────────────────────────────────────

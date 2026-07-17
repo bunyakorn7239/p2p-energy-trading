@@ -1388,6 +1388,58 @@ function renderPfCaseContent() {
   requestAnimationFrame(() => { drawVoltageChart2(pfBase, pfPost); drawLineLoadingChart(pfBase, pfPost); });
 }
 
+// Renders the "RPF vs transformer rating" card for each transformer.
+// Shows the explicit line: RPF = X kW เทียบพิกัด 100 kVA = Y%  + a gauge and verdict.
+function trafoRatingBlock(pf) {
+  const ts = pf.trafoResults || [];
+  if (!ts.length) return "";
+  return ts.map(t => {
+    const sn = t.snKva ?? 100;
+    const sThrough = t.sThroughKva ?? 0;
+    const loadPct = t.loadingPct ?? 0;
+    const rev = !!t.isReverse;
+    const rpfKw = t.rpfKw ?? 0;
+    const rpfPct = t.rpfPctOfRating ?? 0;
+    const headroom = t.loadHeadroomKva ?? (sn - sThrough);
+    // Verdict uses loading% (apparent power) = the true thermal limit of the trafo.
+    const st = loadPct > 100
+      ? { c: "#ef4444", bg: "rgba(239,68,68,.08)", bd: "rgba(239,68,68,.35)", txt: "เกินพิกัด — หม้อแปลง OVERLOAD ⚠️ ห้ามป้อน RPF เพิ่ม" }
+      : loadPct > 80
+        ? { c: "#f59e0b", bg: "rgba(245,158,11,.08)", bd: "rgba(245,158,11,.35)", txt: "ใกล้พิกัด (>80%) — ควรเฝ้าระวังก่อนป้อน RPF เพิ่ม" }
+        : { c: "#16a34a", bg: "rgba(22,163,74,.08)", bd: "rgba(22,163,74,.30)", txt: "อยู่ในพิกัด — ป้อน RPF เข้ากริดได้โดยไม่กระทบหม้อแปลง ✓" };
+    const barPct = Math.min(loadPct, 100);
+    const dirBadge = rev
+      ? `<span style="background:rgba(239,68,68,.12);color:#ef4444;padding:2px 9px;border-radius:5px;font-size:.78rem;font-weight:600">↑ REVERSE ย้อนขึ้นกริด</span>`
+      : `<span style="background:rgba(34,197,94,.12);color:#16a34a;padding:2px 9px;border-radius:5px;font-size:.78rem;font-weight:600">↓ Forward จ่ายลงโหลด</span>`;
+    // The explicit comparison line the design calls for.
+    const compareLine = rev
+      ? `<strong>RPF = ${f4(rpfKw)} kW</strong> &nbsp;เทียบพิกัด&nbsp; <strong>${f4(sn)} kVA</strong> &nbsp;=&nbsp; <strong style="color:${st.c};font-size:1.05em">${f4(rpfPct)}%</strong>`
+      : `กำลังไหลผ่าน <strong>${f4(sThrough)} kVA</strong> &nbsp;เทียบพิกัด&nbsp; <strong>${f4(sn)} kVA</strong> &nbsp;=&nbsp; <strong style="color:${st.c}">${f4(loadPct)}%</strong> <span style="opacity:.7">(ยังไม่มีไฟย้อน RPF)</span>`;
+    return `
+    <div style="margin-top:12px;padding:12px 14px;border-radius:10px;background:${st.bg};border:1px solid ${st.bd}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <strong style="font-size:.95rem">🔌 Trafo #${t.trafoIdx} — RPF เทียบพิกัดหม้อแปลง (${f4(sn)} kVA)</strong>
+        ${dirBadge}
+      </div>
+      <div style="margin-top:10px;font-size:.95rem;line-height:1.6">${compareLine}</div>
+      <div style="margin-top:9px;height:20px;background:rgba(148,163,184,.18);border-radius:6px;overflow:hidden;position:relative">
+        <div style="width:${barPct}%;height:100%;background:${st.c};opacity:.85"></div>
+        <div style="position:absolute;top:0;left:80%;width:2px;height:100%;background:rgba(100,116,139,.7)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.72rem;opacity:.7;margin-top:3px">
+        <span>0</span><span>เส้นเตือน 80%</span><span>${f4(sn)} kVA (พิกัด)</span>
+      </div>
+      <div style="margin-top:9px;font-size:.86rem;color:${st.c};font-weight:600">${st.txt}</div>
+      <div style="margin-top:5px;font-size:.79rem;opacity:.82">
+        |S| ผ่านหม้อแปลง ${f4(sThrough)} kVA · loading (apparent) ${f4(loadPct)}% · เหลือ margin ${f4(headroom)} kVA ก่อนถึงพิกัด
+      </div>
+      <div style="margin-top:6px;font-size:.72rem;opacity:.62;line-height:1.5">
+        หมายเหตุ: %RPF คิดจาก active power (kW) เทียบพิกัด (kVA) ตามการเปรียบเทียบที่ต้องการ · เกณฑ์ overload จริงอิง loading% ที่เป็น apparent power (S) ซึ่งรวม Q ด้วย จึงสูงกว่า %RPF เล็กน้อย
+      </div>
+    </div>`;
+  }).join("");
+}
+
 // Renders one PF case — matches Python display_bus_voltages / display_line_* / display_power_losses
 function renderCaseDetail(pf, label, accentClass) {
   if (!pf || !pf.converged) {
@@ -1410,7 +1462,9 @@ function renderCaseDetail(pf, label, accentClass) {
 
   const trafoRows = (pf.trafoResults || []).map(t => `<tr>
     <td>${t.trafoIdx}</td><td>${t.hvBus}</td><td>${t.lvBus}</td>
-    <td>${f6(t.loadingPct)}</td><td>${f6(t.plKw)}</td><td>${f6(t.qlKvar)}</td>
+    <td>${f6(t.loadingPct)}</td>
+    <td style="color:${t.isReverse ? "#ef4444" : "#22c55e"};white-space:nowrap">${f4(t.pHvKw)}${t.isReverse ? " ⮌ ย้อน" : ""}</td>
+    <td>${f6(t.plKw)}</td><td>${f6(t.qlKvar)}</td>
   </tr>`).join("");
 
   const loss_base = (m.total_load_mw || 0) + (m.total_sgen_mw || 0);
@@ -1453,6 +1507,7 @@ function renderCaseDetail(pf, label, accentClass) {
             ▸ <strong>ย้อนออกกริดที่:</strong> Bus ${m.grid_bus ?? 0} (กริดหลัก/slack) ผ่านหม้อแปลง ↑ จาก Bus ${m.pcc_bus ?? 1} (จุดเชื่อมต่อ PCC)<br>
             ▸ <strong>ปริมาณย้อนออก:</strong> ${f6((m.grid_export_mw || 0) * 1000)} kW
             &nbsp;(No-PV Baseline กริดจ่ายเข้า ${f6((R?.pfBase?.metrics?.grid_supply_mw || 0) * 1000)} kW → POST ${f6((m.grid_supply_mw || 0) * 1000)} kW)
+            ${(pf.trafoResults && pf.trafoResults[0]) ? `<br>▸ <strong>เทียบพิกัดหม้อแปลง:</strong> RPF ${f4(pf.trafoResults[0].rpfKw)} kW / พิกัด ${f4(pf.trafoResults[0].snKva)} kVA = <strong style="color:${pf.trafoResults[0].loadingPct > 100 ? "#ef4444" : pf.trafoResults[0].loadingPct > 80 ? "#f59e0b" : "#16a34a"}">${f4(pf.trafoResults[0].rpfPctOfRating)}%</strong> ${pf.trafoResults[0].loadingPct > 100 ? "— เกินพิกัด หม้อแปลง overload ⚠️" : pf.trafoResults[0].loadingPct > 80 ? "— ใกล้พิกัด ควรระวัง" : "— ยังอยู่ในพิกัด ไม่กระทบหม้อแปลง ✓"}` : ""}
           </div>` : `
           <div style="margin-top:8px;font-size:.86rem">
             กรณีนี้ <strong>ยังไม่ย้อนออกกริด</strong> (กริดยังจ่ายเข้า ${f6((m.grid_supply_mw || 0) * 1000)} kW) แต่มีไฟย้อนภายในสายด้านล่าง
@@ -1570,9 +1625,10 @@ function renderCaseDetail(pf, label, accentClass) {
       <h4 class="pf-sub-title" style="margin-top:12px">Transformer Losses</h4>
       <div class="table-scroll"><table class="data-table">
         <thead><tr><th>Trafo#</th><th>HV Bus</th><th>LV Bus</th>
-          <th>Loading (%)</th><th>P_loss (kW)</th><th>Q_loss (kVAR)</th></tr></thead>
+          <th>Loading (%)</th><th>P_hv (kW)</th><th>P_loss (kW)</th><th>Q_loss (kVAR)</th></tr></thead>
         <tbody>${trafoRows}</tbody>
-      </table></div>` : ""}
+      </table></div>
+      ${trafoRatingBlock(pf)}` : ""}
 
       <!-- Violations -->
       ${(() => {
