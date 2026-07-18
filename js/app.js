@@ -7,7 +7,8 @@
  *
  * WORKFLOW (same as Python script):
  *   Price Check → P2P Matching → BASE PF → PRE_MATCH PF → POST_MATCH PF
- *   → if POST_MATCH violations: Retry (round 1) or Grid Fallback (round 2)
+ *   → if POST_MATCH violations: report the failed limit and stop (no retry)
+ *     (over-voltage / under-voltage / line overload / transformer overload)
  */
 "use strict";
 
@@ -56,14 +57,15 @@ let state = {
 };
 
 let wf = {
-  step: "input",   // input | running | results | retry | grid
-  round: 0,
+  step: "input",   // input | running | results | blocked   (no retry rounds)
+  round: 0,        // retired: retry rounds removed; kept at 0 for compatibility
   energyRange: null,
   backendOk: false,
   priceErrors: [],
   pfViolations: [],
+  pfProblems: [],  // classified problems: over/under-voltage, line & trafo overload
   failedPlayers: { sellers: [], buyers: [], buses: [] },
-  retryPlayers: new Set(),
+  retryPlayers: new Set(),   // players on a violated bus (row highlight only)
   gridFallback: false,
   apiResult: null,      // last successful API response
   eventLog: [],
@@ -281,7 +283,7 @@ function onResetDefaults() {
   state.biddingPrice = { ...DEFAULT_BIDDING };
   state.sellerKwh = { ...DEFAULT_SELLER_NRG };
   state.buyerKwh = { ...DEFAULT_BUYER_NRG };
-  wf.round = 0; wf.step = "input"; wf.priceErrors = [];
+  wf.round = 0; wf.step = "input"; wf.priceErrors = []; wf.pfProblems = [];
   wf.failedPlayers = { sellers: [], buyers: [], buses: [] };
   wf.retryPlayers = new Set(); wf.eventLog = []; wf.apiResult = null;
   renderAll(); showTab("inputs");
@@ -360,7 +362,7 @@ function renderWorkflowBanner() {
     { label: "⑤ Results" },
   ];
   const order = ["analysis", "input", "matching", "pflow", "results"];
-  const curMap = { input: "input", running: "matching", retry: "pflow", grid: "pflow", results: "results" };
+  const curMap = { input: "input", running: "matching", blocked: "pflow", results: "results" };
   const curStep = curMap[wf.step] || "input";
   const ci = order.indexOf(curStep);
   const stepsHtml = steps.map((s, i) => {
@@ -368,12 +370,12 @@ function renderWorkflowBanner() {
     return `<div class="wf-step ${cls}">${s.label}</div>`;
   }).join(`<div class="wf-arrow">→</div>`);
 
+  const probTypes = (wf.pfProblems || []).map(p => p.type).join(", ");
   const statusMap = {
     input: { cls: "status-blue", icon: "📝", text: "Enter Input Data" },
     running: { cls: "status-yellow", icon: "⏳", text: "Running pandapower analysis…" },
     results: { cls: "status-green", icon: "✅", text: "P2P Trading Successful — 3 PF Cases (pandapower)" },
-    retry: { cls: "status-orange", icon: "⚠️", text: `POST_MATCH PF Failed — Retry Round ${wf.round}/2` },
-    grid: { cls: "status-red", icon: "❌", text: "Grid Fallback Active (P2P Abandoned)" },
+    blocked: { cls: "status-red", icon: "⛔", text: `POST_MATCH PF Failed — ${probTypes || "constraint violated"}` },
   };
   const s = statusMap[wf.step] || statusMap.input;
   el.innerHTML = `
@@ -495,30 +497,33 @@ function renderInputs() {
   if (!el) return;
 
   let alertHtml = "";
-  if (wf.step === "retry") {
-    const violBuses = wf.pfViolations.map(v =>
-      `<span class="viol-bus">Bus ${v.bus} (${f6(v.vm_pu)} p.u. — ${v.bus < 1 ? "?" : v.vm_pu < 0.95 ? "UNDER" : "OVER"}VOLTAGE)</span>`
-    ).join(" ");
+  if (wf.step === "blocked") {
+    const probs = wf.pfProblems || [];
+    const cards = probs.map(p => `
+      <div style="margin-top:8px;padding:9px 11px;border-radius:8px;
+                  background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.30)">
+        <div style="font-weight:700;color:#ef4444;font-size:.92rem">
+          ${p.icon} ${p.label}
+          <span style="font-weight:400;opacity:.75;font-size:.82rem"> — เกณฑ์: ${p.limit}</span>
+        </div>
+        <div style="margin-top:3px;font-size:.86rem">${p.detail}</div>
+        <ul style="margin:5px 0 0 18px;font-size:.8rem;opacity:.88;line-height:1.6">
+          ${p.items.map(i => `<li>${i}</li>`).join("")}
+        </ul>
+      </div>`).join("");
     const fpNames = [
       ...wf.failedPlayers.sellers.map(s => `<span class="tag seller-tag">${s}</span>`),
       ...wf.failedPlayers.buyers.map(b => `<span class="tag buyer-tag">${b}</span>`),
-    ].join(" ") || "—";
-    alertHtml = `
-      <div class="wf-alert alert-retry">
-        <div class="wf-alert-title">⚠️ POST_MATCH Power Flow FAILED — Round 1 of 2 (pandapower)</div>
-        <div class="wf-alert-body">
-          <p><strong>Violated buses:</strong> ${violBuses}</p>
-          <p><strong>Affected players (highlighted):</strong> ${fpNames}</p>
-          <p>Reduce energy for highlighted players then re-run.
-             <strong>Round 2 failure forces grid trading.</strong></p>
-        </div>
-      </div>`;
-  }
-  if (wf.step === "grid") {
+    ].join(" ");
     alertHtml = `
       <div class="wf-alert alert-grid">
-        <div class="wf-alert-title">❌ P2P ABANDONED — Grid Fallback (Round 2 Failed)</div>
-        <div class="wf-alert-body">${renderGridFallbackTable()}</div>
+        <div class="wf-alert-title">⛔ POST_MATCH Power Flow FAILED — ไม่ผ่านเงื่อนไข ${probs.length} ข้อ</div>
+        <div class="wf-alert-body">
+          <p style="margin:0">การซื้อขายถูกระงับ ระบบไม่ทำการ retry ให้อัตโนมัติ —
+             กรุณาแก้ค่าพลังงานด้านล่างแล้วกด Run Analysis ใหม่</p>
+          ${cards}
+          ${fpNames ? `<p style="margin-top:9px"><strong>ผู้เล่นที่อยู่บนบัสที่ผิดเงื่อนไข:</strong> ${fpNames}</p>` : ""}
+        </div>
       </div>`;
   }
 
@@ -541,15 +546,19 @@ function renderInputs() {
 }
 
 function buildInputSection() {
-  const isGrid = wf.step === "grid";
-  const isRetry = wf.step === "retry";
-  const btnLabel = isRetry ? "🔄 Re-run (Round 2 — Final Chance)" : "▶ Run Analysis (pandapower)";
-  const actionBar = isGrid
-    ? `<button class="btn btn-secondary" onclick="onResetDefaults()">↩ Reset &amp; Start Over</button>`
-    : `<button class="btn btn-primary" onclick="onRunAnalysis()">${btnLabel}</button>
+  const isBlocked = wf.step === "blocked";
+  // Retry rounds removed: the button label never changes, and the old
+  // "Round X / 2" indicator is replaced by a note naming the failed limits.
+  const probNote = isBlocked
+    ? `<span class="retry-round-indicator" style="background:rgba(239,68,68,.12);color:#ef4444">
+         ⛔ ติดเงื่อนไข: ${(wf.pfProblems || []).map(p => p.type).join(" + ")}
+       </span>`
+    : "";
+  const actionBar =
+    `<button class="btn btn-primary" onclick="onRunAnalysis()">▶ Run Analysis (pandapower)</button>
        <button class="btn btn-secondary" onclick="onResetDefaults()">↩ Reset Defaults</button>
        <button class="btn btn-secondary" onclick="randomizeEnergies()">🎲 สุ่มพลังงาน</button>
-       ${isRetry ? `<span class="retry-round-indicator">Round ${wf.round} / 2</span>` : ""}`;
+       ${probNote}`;
 
   const maxKwh = wf.energyRange ? wf.energyRange.max_kwh_per_seller : 9999;
   const failed = wf.retryPlayers;
@@ -945,6 +954,8 @@ function _bulkPasteFinish(st, applied) {
 }
 
 
+// UNUSED since the retry/grid-fallback flow was removed. Kept intact so the
+// table can be reused if grid fallback is reintroduced as an explicit choice.
 function renderGridFallbackTable() {
   const rows = BUYERS.map(b => {
     const cost = state.buyerKwh[b] * RETAIL_PRICE;
@@ -1388,8 +1399,52 @@ function renderPfCaseContent() {
   requestAnimationFrame(() => { drawVoltageChart2(pfBase, pfPost); drawLineLoadingChart(pfBase, pfPost); });
 }
 
+// ── Four-gate safety evaluation ────────────────────────────────────────────
+// The transformer rating is only ONE of the limits that bind when RPF grows.
+// Verified by binary search on this network (kWh injected per seller):
+//   reverse-flow onset 2.04  →  V > 1.05 at 11.57  →  line 100% at 18.66
+//   →  transformer 100% at 23.43
+// i.e. voltage binds FIRST, transformer binds LAST. A transformer-only verdict
+// therefore reads "green" while the feeder is already in over-voltage, so the
+// card must combine all gates before it may show a green light.
+function evalGates(pf, t) {
+  const m = pf.metrics || {};
+  const v = pf.violations || {};
+  const over = v.over || [], under = v.under || [], thermal = v.thermal || [];
+  const loadPct = t.loadingPct ?? 0;
+
+  const gates = [
+    {
+      key: "volt",
+      name: "แรงดัน (0.95 – 1.05 p.u.)",
+      fail: over.length > 0 || under.length > 0,
+      detail: over.length
+        ? `เกิน ${over.length} บัส · สูงสุด ${f4(m.max_voltage_pu ?? 0)} p.u.`
+        : under.length
+          ? `ต่ำ ${under.length} บัส · ต่ำสุด ${f4(m.min_voltage_pu ?? 0)} p.u.`
+          : `Vmin ${f4(m.min_voltage_pu ?? 0)} · Vmax ${f4(m.max_voltage_pu ?? 0)} p.u.`,
+    },
+    {
+      key: "line",
+      name: "สายป้อน (≤ 100%)",
+      fail: thermal.length > 0,
+      detail: `สูงสุด ${f4(m.max_line_loading_pct ?? 0)}%` +
+        (thermal.length ? ` · เกิน ${thermal.length} เส้น` : ""),
+    },
+    {
+      key: "trafo",
+      name: `หม้อแปลง (≤ 100% ของ ${f4(t.snKva ?? 100)} kVA)`,
+      fail: loadPct > 100,
+      detail: `loading ${f4(loadPct)}%`,
+    },
+  ];
+  const failed = gates.filter(g => g.fail);
+  return { gates, failed, anyFail: failed.length > 0 };
+}
+
 // Renders the "RPF vs transformer rating" card for each transformer.
-// Shows the explicit line: RPF = X kW เทียบพิกัด 100 kVA = Y%  + a gauge and verdict.
+// Shows the explicit line: RPF = X kW เทียบพิกัด 100 kVA = Y%  + a gauge,
+// a transformer-only verdict, and a combined four-gate verdict on top.
 function trafoRatingBlock(pf) {
   const ts = pf.trafoResults || [];
   if (!ts.length) return "";
@@ -1401,12 +1456,38 @@ function trafoRatingBlock(pf) {
     const rpfKw = t.rpfKw ?? 0;
     const rpfPct = t.rpfPctOfRating ?? 0;
     const headroom = t.loadHeadroomKva ?? (sn - sThrough);
-    // Verdict uses loading% (apparent power) = the true thermal limit of the trafo.
+    // Transformer-ONLY verdict — scoped wording, never claims the trade is safe.
+    // Whether RPF may actually be injected is decided by the combined gate result
+    // below (gt), not by this line.
     const st = loadPct > 100
-      ? { c: "#ef4444", bg: "rgba(239,68,68,.08)", bd: "rgba(239,68,68,.35)", txt: "เกินพิกัด — หม้อแปลง OVERLOAD ⚠️ ห้ามป้อน RPF เพิ่ม" }
+      ? { c: "#ef4444", bg: "rgba(239,68,68,.08)", bd: "rgba(239,68,68,.35)", txt: "เฉพาะหม้อแปลง: เกินพิกัด — OVERLOAD ⚠️" }
       : loadPct > 80
-        ? { c: "#f59e0b", bg: "rgba(245,158,11,.08)", bd: "rgba(245,158,11,.35)", txt: "ใกล้พิกัด (>80%) — ควรเฝ้าระวังก่อนป้อน RPF เพิ่ม" }
-        : { c: "#16a34a", bg: "rgba(22,163,74,.08)", bd: "rgba(22,163,74,.30)", txt: "อยู่ในพิกัด — ป้อน RPF เข้ากริดได้โดยไม่กระทบหม้อแปลง ✓" };
+        ? { c: "#f59e0b", bg: "rgba(245,158,11,.08)", bd: "rgba(245,158,11,.35)", txt: "เฉพาะหม้อแปลง: ใกล้พิกัด (>80%) — ควรเฝ้าระวัง" }
+        : { c: "#16a34a", bg: "rgba(22,163,74,.08)", bd: "rgba(22,163,74,.30)", txt: "เฉพาะหม้อแปลง: อยู่ในพิกัด (ยังไม่สรุปว่าป้อน RPF ได้ — ดูผลรวมทุกเกจด้านบน)" };
+
+    // Combined four-gate result — this is what decides the card's overall color.
+    const gt = evalGates(pf, t);
+    const ov = gt.anyFail
+      ? { c: "#ef4444", bg: "rgba(239,68,68,.10)", bd: "rgba(239,68,68,.40)" }
+      : { c: "#16a34a", bg: "rgba(22,163,74,.10)", bd: "rgba(22,163,74,.35)" };
+    const gateRows = gt.gates.map(g => `
+        <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:3px 0">
+          <span style="flex:0 0 16px;color:${g.fail ? "#ef4444" : "#16a34a"};font-weight:700">${g.fail ? "✕" : "✓"}</span>
+          <span style="flex:0 0 200px;color:${g.fail ? "#ef4444" : "inherit"};font-weight:${g.fail ? 600 : 400}">${g.name}</span>
+          <span style="opacity:.78">${g.detail}</span>
+        </div>`).join("");
+    const overallBanner = `
+      <div style="margin-bottom:12px;padding:10px 12px;border-radius:9px;background:${ov.bg};border:1px solid ${ov.bd}">
+        <div style="font-size:.92rem;font-weight:700;color:${ov.c}">
+          ${gt.anyFail
+        ? `⛔ ห้ามป้อน RPF เข้ากริด — ติดที่: ${gt.failed.map(g => g.name.split(" (")[0]).join(" + ")}`
+        : "✅ ป้อน RPF เข้ากริดได้ — ผ่านครบทุกเกจ (แรงดัน · สาย · หม้อแปลง)"}
+        </div>
+        <div style="margin-top:7px">${gateRows}</div>
+        ${gt.anyFail ? `<div style="margin-top:7px;font-size:.75rem;color:${ov.c};line-height:1.5">
+          ข้อจำกัดที่ชนก่อนมักเป็น "แรงดัน" ไม่ใช่หม้อแปลง — บนโครงข่ายนี้แรงดันเกิน 1.05 p.u. ตั้งแต่หม้อแปลงยังโหลดราว 46% เท่านั้น
+        </div>` : ""}
+      </div>`;
     const barPct = Math.min(loadPct, 100);
     const dirBadge = rev
       ? `<span style="background:rgba(239,68,68,.12);color:#ef4444;padding:2px 9px;border-radius:5px;font-size:.78rem;font-weight:600">↑ REVERSE ย้อนขึ้นกริด</span>`
@@ -1416,7 +1497,8 @@ function trafoRatingBlock(pf) {
       ? `<strong>RPF = ${f4(rpfKw)} kW</strong> &nbsp;เทียบพิกัด&nbsp; <strong>${f4(sn)} kVA</strong> &nbsp;=&nbsp; <strong style="color:${st.c};font-size:1.05em">${f4(rpfPct)}%</strong>`
       : `กำลังไหลผ่าน <strong>${f4(sThrough)} kVA</strong> &nbsp;เทียบพิกัด&nbsp; <strong>${f4(sn)} kVA</strong> &nbsp;=&nbsp; <strong style="color:${st.c}">${f4(loadPct)}%</strong> <span style="opacity:.7">(ยังไม่มีไฟย้อน RPF)</span>`;
     return `
-    <div style="margin-top:12px;padding:12px 14px;border-radius:10px;background:${st.bg};border:1px solid ${st.bd}">
+    <div style="margin-top:12px;padding:12px 14px;border-radius:10px;background:${ov.bg};border:1px solid ${ov.bd}">
+      ${overallBanner}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <strong style="font-size:.95rem">🔌 Trafo #${t.trafoIdx} — RPF เทียบพิกัดหม้อแปลง (${f4(sn)} kVA)</strong>
         ${dirBadge}
@@ -1507,7 +1589,19 @@ function renderCaseDetail(pf, label, accentClass) {
             ▸ <strong>ย้อนออกกริดที่:</strong> Bus ${m.grid_bus ?? 0} (กริดหลัก/slack) ผ่านหม้อแปลง ↑ จาก Bus ${m.pcc_bus ?? 1} (จุดเชื่อมต่อ PCC)<br>
             ▸ <strong>ปริมาณย้อนออก:</strong> ${f6((m.grid_export_mw || 0) * 1000)} kW
             &nbsp;(No-PV Baseline กริดจ่ายเข้า ${f6((R?.pfBase?.metrics?.grid_supply_mw || 0) * 1000)} kW → POST ${f6((m.grid_supply_mw || 0) * 1000)} kW)
-            ${(pf.trafoResults && pf.trafoResults[0]) ? `<br>▸ <strong>เทียบพิกัดหม้อแปลง:</strong> RPF ${f4(pf.trafoResults[0].rpfKw)} kW / พิกัด ${f4(pf.trafoResults[0].snKva)} kVA = <strong style="color:${pf.trafoResults[0].loadingPct > 100 ? "#ef4444" : pf.trafoResults[0].loadingPct > 80 ? "#f59e0b" : "#16a34a"}">${f4(pf.trafoResults[0].rpfPctOfRating)}%</strong> ${pf.trafoResults[0].loadingPct > 100 ? "— เกินพิกัด หม้อแปลง overload ⚠️" : pf.trafoResults[0].loadingPct > 80 ? "— ใกล้พิกัด ควรระวัง" : "— ยังอยู่ในพิกัด ไม่กระทบหม้อแปลง ✓"}` : ""}
+            ${(() => {
+          const t0 = pf.trafoResults && pf.trafoResults[0];
+          if (!t0) return "";
+          const g = evalGates(pf, t0);
+          const col = g.anyFail ? "#ef4444" : "#16a34a";
+          // Scoped: this % compares RPF against the TRANSFORMER rating only.
+          const cmp = `<br>▸ <strong>เทียบพิกัดหม้อแปลง (เฉพาะหม้อแปลง):</strong> RPF ${f4(t0.rpfKw)} kW / พิกัด ${f4(t0.snKva)} kVA = <strong style="color:${t0.loadingPct > 100 ? "#ef4444" : t0.loadingPct > 80 ? "#f59e0b" : "#16a34a"}">${f4(t0.rpfPctOfRating)}%</strong> ${t0.loadingPct > 100 ? "— เกินพิกัด overload ⚠️" : t0.loadingPct > 80 ? "— ใกล้พิกัด ควรระวัง" : "— หม้อแปลงยังอยู่ในพิกัด"}`;
+          // Overall: names the constraint that actually binds.
+          const all = `<br>▸ <strong>สรุปรวมทุกเกจ:</strong> <strong style="color:${col}">${g.anyFail
+            ? `⛔ ห้ามป้อน RPF — ติดที่ ${g.failed.map(x => x.name.split(" (")[0]).join(" + ")}`
+            : "✅ ผ่านครบทุกเกจ (แรงดัน · สาย · หม้อแปลง)"}</strong>`;
+          return cmp + all;
+        })()}
           </div>` : `
           <div style="margin-top:8px;font-size:.86rem">
             กรณีนี้ <strong>ยังไม่ย้อนออกกริด</strong> (กริดยังจ่ายเข้า ${f6((m.grid_supply_mw || 0) * 1000)} kW) แต่มีไฟย้อนภายในสายด้านล่าง
@@ -1518,13 +1612,13 @@ function renderCaseDetail(pf, label, accentClass) {
             <strong>Reverse flow lines (${pf.reverseLines.length} สาย):</strong>
             <div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:6px">
               ${pf.reverseLines.map(l => {
-    const bl = (R?.pfBase?.lineResults || []).find(x => x.from === l.from && x.to === l.to);
-    const baseLoad = bl ? bl.loading : 0;
-    const up = l.loading > baseLoad + 1e-6;
-    const arrow = up ? "↑" : "↓";
-    const col = up ? "rgba(239,68,68,.16)" : "rgba(245,158,11,.13)";
-    return `<span style="padding:2px 8px;border-radius:5px;background:${col};font-size:.8rem" title="BASE ${f4(baseLoad)}% → POST ${f4(l.loading)}%">Bus ${l.from}→${l.to} · ${f4(l.pFromKw)} kW · load ${f4(baseLoad)}%→${f4(l.loading)}% ${arrow}</span>`;
-  }).join("")}
+          const bl = (R?.pfBase?.lineResults || []).find(x => x.from === l.from && x.to === l.to);
+          const baseLoad = bl ? bl.loading : 0;
+          const up = l.loading > baseLoad + 1e-6;
+          const arrow = up ? "↑" : "↓";
+          const col = up ? "rgba(239,68,68,.16)" : "rgba(245,158,11,.13)";
+          return `<span style="padding:2px 8px;border-radius:5px;background:${col};font-size:.8rem" title="BASE ${f4(baseLoad)}% → POST ${f4(l.loading)}%">Bus ${l.from}→${l.to} · ${f4(l.pFromKw)} kW · load ${f4(baseLoad)}%→${f4(l.loading)}% ${arrow}</span>`;
+        }).join("")}
             </div>
             <div style="margin-top:6px;opacity:.78;font-size:.78rem;line-height:1.5">
               หมายเหตุ: <strong>reverse flow = ทิศทางกลับด้าน</strong> (กำลังติดลบ = ไหลจากปลายสายกลับมาต้นสาย) ซึ่ง<strong>ไม่ใช่</strong>เรื่องเดียวกับ %loading เพิ่ม
