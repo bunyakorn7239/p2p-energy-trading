@@ -1,0 +1,87 @@
+"""Verify /api/energy_range_live against a brute-force 40-iteration bisection."""
+import sys, time, json; sys.path.append('.')
+from server import app, SELLERS, BUYERS, PLAYER_LOCATIONS, run_case, bus_idx, ACTUAL_LOAD_DATA
+
+c = app.test_client()
+
+def brute(s_shape, b_vec, hi=200.0):
+    """Ground truth: 40-iteration bisection on total seller injection."""
+    lo = 0.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        r = run_case("POST_MATCH", SELLERS, BUYERS, PLAYER_LOCATIONS,
+                     buyer_energy_kwh=dict(b_vec),
+                     seller_sold_kwh={s: 0.0 for s in SELLERS},
+                     seller_unsold_kwh={k: mid * w for k, w in s_shape.items()})
+        v = r.get("violations", {})
+        good = r.get("converged") and not (v["over"] or v["under"] or v["thermal"])
+        lo, hi = (mid, hi) if good else (lo, mid)
+    return lo
+
+def brute_buyer(s_vec, b_shape, hi=300.0):
+    lo = 0.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        r = run_case("POST_MATCH", SELLERS, BUYERS, PLAYER_LOCATIONS,
+                     buyer_energy_kwh={k: mid * w for k, w in b_shape.items()},
+                     seller_sold_kwh={s: 0.0 for s in SELLERS},
+                     seller_unsold_kwh=dict(s_vec))
+        v = r.get("violations", {})
+        good = r.get("converged") and not (v["over"] or v["under"] or v["thermal"])
+        lo, hi = (mid, hi) if good else (lo, mid)
+    return lo
+
+CASES = [
+    ("equal 3.16 / ref buyer load",
+     {s: 3.16 for s in SELLERS},
+     {"A": 4.469, "B": 7.769, "G": 1.169, "H": 1.169, "J": 0.974}),
+    ("end-heavy D,E,F / ref buyer load",
+     {"C": 1.0, "D": 6.0, "E": 6.0, "F": 6.0, "I": 1.0},
+     {"A": 4.469, "B": 7.769, "G": 1.169, "H": 1.169, "J": 0.974}),
+    ("head-heavy I,C / ref buyer load",
+     {"C": 6.0, "D": 1.0, "E": 1.0, "F": 1.0, "I": 6.0},
+     {"A": 4.469, "B": 7.769, "G": 1.169, "H": 1.169, "J": 0.974}),
+    ("ALL at D / ref buyer load",
+     {"C": 0.0, "D": 10.0, "E": 0.0, "F": 0.0, "I": 0.0},
+     {"A": 4.469, "B": 7.769, "G": 1.169, "H": 1.169, "J": 0.974}),
+    ("equal 3.0 / big buyer load 40",
+     {s: 3.0 for s in SELLERS},
+     {"A": 8.0, "B": 8.0, "G": 8.0, "H": 8.0, "J": 8.0}),
+    ("already violating (12 each)",
+     {s: 12.0 for s in SELLERS},
+     {"A": 4.469, "B": 7.769, "G": 1.169, "H": 1.169, "J": 0.974}),
+]
+
+print(f"{'case':<36}{'live_S':>9}{'brute_S':>9}{'err':>8}"
+      f"{'live_B':>9}{'brute_B':>9}{'err':>8}{'PF':>5}{'sec':>7}")
+print("-" * 100)
+for tag, s_vec, b_vec in CASES:
+    t0 = time.time()
+    r = c.post("/api/energy_range_live", json={
+        "seller_energy_kwh": s_vec, "buyer_energy_kwh": b_vec}).get_json()
+    dt = time.time() - t0
+
+    st = sum(s_vec.values()); bt = sum(b_vec.values())
+    s_shape = {k: v / st for k, v in s_vec.items()} if st else {k: .2 for k in SELLERS}
+    b_shape = {k: v / bt for k, v in b_vec.items()} if bt else {k: .2 for k in BUYERS}
+    gs = brute(s_shape, b_vec)
+    gb = brute_buyer(s_vec, b_shape)
+
+    ls, lb = r["live_max_total_seller"], r["live_max_total_buyer"]
+    print(f"{tag:<36}{ls:>9.2f}{gs:>9.2f}{ls-gs:>8.2f}"
+          f"{lb:>9.2f}{gb:>9.2f}{lb-gb:>8.2f}{r['power_flows']:>5}{dt:>7.2f}")
+
+# safety: reported cap must never violate
+print("\nSafety check — inject exactly the reported live cap:")
+for tag, s_vec, b_vec in CASES[:4]:
+    r = c.post("/api/energy_range_live", json={
+        "seller_energy_kwh": s_vec, "buyer_energy_kwh": b_vec}).get_json()
+    cap = r["live_max_per_seller"]
+    rr = run_case("POST_MATCH", SELLERS, BUYERS, PLAYER_LOCATIONS,
+                  buyer_energy_kwh=dict(b_vec),
+                  seller_sold_kwh={s: 0.0 for s in SELLERS},
+                  seller_unsold_kwh=cap)
+    v = rr["violations"]
+    bad = len(v["over"]) + len(v["under"]) + len(v["thermal"])
+    print(f"  {tag:<36} Vmax={rr['metrics']['max_voltage_pu']:.5f} "
+          f"over={len(v['over'])} -> {'FAIL' if bad else 'SAFE'}")
