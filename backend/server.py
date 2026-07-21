@@ -467,10 +467,25 @@ _DEFAULT_ER = {
     "reverse_edge_per":         3.16,
     "reverse_edge_total":       15.80,
     "reverse_onset_total":      15.83,
-    "hard_total_premaatch":     54.31,   # PRE_MATCH hard limit (reference)
-    "hard_total":               61.79,   # POST_MATCH hard limit (real edge)
-    "hard_per":                 12.35,   # = 61.79 / 5 (safe input ceiling 12.3)
-    "thermal_max_total_seller": 54.31,
+    # ── OVER-VOLTAGE hard cap ────────────────────────────────────────────────
+    # CORRECTED (was 61.79 / 12.35, which VIOLATES: Vmax = 1.05245, 3 buses over).
+    # The POST_MATCH limit depends on buyer demand, which is USER INPUT, so it
+    # cannot be cached as a constant. The cap that is valid for ANY buyer demand
+    # is the zero-load worst case, which equals the PRE_MATCH limit.
+    #   verified by binary search: 54.3065 kWh total, Vmax = 1.05000 exactly.
+    "hard_total":               54.30,   # worst case, valid for any buyer demand
+    "hard_per":                 10.86,   # = 54.30 / 5
+    "hard_total_premaatch":     54.30,   # PRE_MATCH limit (identical, kept for the UI)
+    # Reference-load limit — ONLY valid when Sigma buyer load == 15.55 kWh.
+    # Shown for information; never enforced as an input cap.
+    "hard_total_at_ref_load":   58.84,   # verified: 58.8450, Vmax = 1.05000
+    "hard_per_at_ref_load":     11.76,
+    # ── UNDER-VOLTAGE cap (buyer side, BUYER_TEST) ───────────────────────────
+    # verified by binary search: 70.9115 kWh total, Vmin = 0.95000 exactly.
+    # NOTE the binding constraint here is VOLTAGE, not thermal (loading 93.84%).
+    "undervolt_total_buyer":    70.91,
+    "undervolt_per_buyer":      14.18,   # = 70.91 / 5
+    "thermal_max_total_seller": 54.30,
     "thermal_max_total_buyer":  70.91,
 }
 
@@ -484,7 +499,8 @@ def _is_default(sellers, buyers, player_locations):
 def _build_response(relief_per, relief_total, hard_per, hard_total,
                     op_total, allow_reverse,
                     reverse_edge_per=None, reverse_edge_total=None,
-                    reverse_onset_total=None, extra=None):
+                    reverse_onset_total=None, extra=None,
+                    buyer_per=None, buyer_total=None):
     if allow_reverse:
         cap_per, cap_total = hard_per, hard_total
         mode = "hosting-capacity (reverse flow allowed)"
@@ -501,8 +517,13 @@ def _build_response(relief_per, relief_total, hard_per, hard_total,
         # active cap the UI should enforce on inputs:
         "max_kwh_per_seller":   cap_per,
         "max_kwh_total_seller": cap_total,
-        "max_kwh_per_buyer":    cap_per,
-        "max_kwh_total_buyer":  cap_total,
+        # BUG FIX: the buyer cap used to be a copy of the SELLER cap, which has
+        # nothing to do with under-voltage. It is now the buyer-side
+        # under-voltage limit from the BUYER_TEST binary search.
+        "max_kwh_per_buyer":    buyer_per   if buyer_per   is not None else cap_per,
+        "max_kwh_total_buyer":  buyer_total if buyer_total is not None else cap_total,
+        "undervolt_per_buyer":   buyer_per,
+        "undervolt_total_buyer": buyer_total,
         # both caps, always provided so a UI toggle needs no refetch:
         "relief_per": relief_per, "relief_total": relief_total,
         "hard_per": hard_per,     "hard_total": hard_total,
@@ -518,7 +539,10 @@ def _build_response(relief_per, relief_total, hard_per, hard_total,
             f"\u03a3inject = \u03a3load, no reverse guaranteed) \u00b7 "
             f"real edge before reverse = {r_edge_total:.2f} kW ({r_edge_per:.2f}/each, "
             f"\u03a3load + loss) \u00b7 reverse-flow onset ~{r_onset_tot:.2f} kW \u00b7 "
-            f"hard over-voltage limit {hard_total:.2f} kW ({hard_per:.2f}/each, Vmax = 1.05)."
+            f"hard over-voltage limit {hard_total:.2f} kW ({hard_per:.2f}/each, Vmax = 1.05, "
+            f"worst case = zero buyer load, valid for any demand)"
+            + (f" \u00b7 under-voltage limit {buyer_total:.2f} kW ({buyer_per:.2f}/buyer, "
+               f"Vmin = 0.95)." if buyer_total is not None else ".")
         ),
     }
     if extra:
@@ -547,8 +571,13 @@ def energy_range():
             reverse_edge_per=d["reverse_edge_per"],
             reverse_edge_total=d["reverse_edge_total"],
             reverse_onset_total=d["reverse_onset_total"],
-            extra={"thermal_max_total_seller": d["thermal_max_total_seller"],
-                   "thermal_max_total_buyer":  d["thermal_max_total_buyer"]}))
+            buyer_per=d["undervolt_per_buyer"],
+            buyer_total=d["undervolt_total_buyer"],
+            extra={"thermal_max_total_seller":  d["thermal_max_total_seller"],
+                   "thermal_max_total_buyer":   d["thermal_max_total_buyer"],
+                   "hard_total_at_ref_load":    d["hard_total_at_ref_load"],
+                   "hard_per_at_ref_load":      d["hard_per_at_ref_load"],
+                   "hard_total_premaatch":      d["hard_total_premaatch"]}))
 
     # 2) Custom layout: compute + cache (keyed on layout, not on the flag).
     key = hashlib.md5(json.dumps(
@@ -569,6 +598,24 @@ def energy_range():
         for _ in range(40):
             mid = (lo_s + hi_s) / 2.0
             lo_s, hi_s = (mid, hi_s) if seller_ok(mid) else (lo_s, mid)
+
+        # Buyer-side UNDER-voltage limit. This was missing entirely: the custom
+        # branch used to return the SELLER cap as the buyer cap.
+        def buyer_ok(total):
+            per = total / max(n_b, 1)
+            try:
+                r = run_case("BUYER_TEST", sellers, buyers, player_locations,
+                             buyer_energy_kwh={b: per for b in buyers})
+                if not r.get("converged"): return False
+                v = r["violations"]
+                return len(v["under"])==0 and len(v["over"])==0 and len(v["thermal"])==0
+            except Exception:
+                return False
+        lo_b, hi_b = 0.0, 300.0
+        if n_b:
+            for _ in range(40):
+                mid = (lo_b + hi_b) / 2.0
+                lo_b, hi_b = (mid, hi_b) if buyer_ok(mid) else (lo_b, mid)
         op_total = sum(ACTUAL_LOAD_DATA.get(bus_idx(player_locations[b]), (0.0, 0.0))[0]
                        for b in buyers) * 1000.0
         # Reverse-flow onset = Σload + loss (grid_supply = 0). A single POST_MATCH
@@ -591,14 +638,18 @@ def energy_range():
             pass
         edge_per   = int((onset_total / n) * 100) / 100.0   # floor to 2-dp (stay pre-reverse)
         edge_total = round(edge_per * n, 2)
-        _ER_CACHE[key] = (round(min(lo_s, op_total)/n, 2), round(min(lo_s, op_total), 2),
-                          round(lo_s/n, 2), round(lo_s, 2), round(op_total, 2),
-                          edge_per, edge_total, round(onset_total, 2))
-    rp, rt, hp, ht, op_total, r_edge_per, r_edge_total, r_onset_total = _ER_CACHE[key]
+        f2 = lambda x: int(x * 100) / 100.0      # floor: never round a cap UP
+        _ER_CACHE[key] = (f2(min(lo_s, op_total)/n), f2(min(lo_s, op_total)),
+                          f2(lo_s/n), f2(lo_s), round(op_total, 2),
+                          edge_per, edge_total, round(onset_total, 2),
+                          f2(lo_b/n_b) if n_b else 0.0, f2(lo_b))
+    (rp, rt, hp, ht, op_total, r_edge_per, r_edge_total,
+     r_onset_total, bu_per, bu_total) = _ER_CACHE[key]
     return jsonify(_build_response(rp, rt, hp, ht, op_total, allow_reverse,
                                    reverse_edge_per=r_edge_per,
                                    reverse_edge_total=r_edge_total,
-                                   reverse_onset_total=r_onset_total))
+                                   reverse_onset_total=r_onset_total,
+                                   buyer_per=bu_per, buyer_total=bu_total))
 
 
 @app.route("/api/powerflow_case", methods=["POST"])
@@ -792,6 +843,14 @@ def analyze():
 # =============================================================================
 # Entry point
 # =============================================================================
+
+# --- LIVE feasible-range endpoint (separate module; nothing above changes) ---
+try:
+    from energy_range_live import bp_live
+    app.register_blueprint(bp_live)
+except Exception as _e:          # module missing -> app still runs as before
+    print("energy_range_live not loaded:", _e)
+
 if __name__ == "__main__":
     from market import register_market_routes
     register_market_routes(app)
