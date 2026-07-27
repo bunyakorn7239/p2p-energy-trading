@@ -437,7 +437,7 @@ function renderEnergyRangeBanner() {
         ${cell("⚪", "Min / Seller", "0", "kWh", GREY, "ต่ำสุด — ไม่ฉีดไฟ")}
         ${cell("🟢", "ปลอดภัย (No Reverse)", f(safePer), "kWh/ราย", GREEN, `รวม ${f(safeTot)} kWh · <code>Σinject = Σload</code>`)}
         ${cell("🟠", "สูงสุดจริงก่อน Reverse", f(edgePer), "kWh/ราย", AMBER, `รวม ${f(edgeTot)} kWh · <code>Σload + loss</code> (onset ≈ ${f(onsetTot)})`)}
-        ${cell("🔴", "เพดานแข็ง Over-voltage", f(hardPer), "kWh/ราย", RED, `รวม ${f(hardTot)} kWh · <code>Vmax = 1.05 p.u.</code>`)}
+        ${cell("🔴", "เพดานแข็ง Over-voltage (คิดแบบ load ต่ำสุด)", f(hardPer), "kWh/ราย", RED, `รวม ${f(hardTot)} kWh · <code>Vmax = 1.05 p.u.</code>`)}
       </div>
 
       <!-- ─────────── BUYER (ผู้ซื้อ — ใช้ไฟ) ─────────── -->
@@ -445,7 +445,7 @@ function renderEnergyRangeBanner() {
       <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px;">
         ${cell("⚪", "Min / Buyer", "0", "kWh", GREY, "ต่ำสุด — ไม่ใช้ไฟ")}
         ${cell("🟢", "ปลอดภัย (No Reverse)", f(safePer), "kWh/ราย", GREEN, `รวม ${f(safeTot)} kWh · <code>Σload = Σinject</code>`)}
-        ${cell("🔴", "เพดาน Under-voltage", f(uvPer), "kWh/ราย", RED, `รวม ${f(uvTot)} kWh · <code>Vmin = 0.95 p.u.</code>`)}
+        ${cell("🔴", "เพดาน Under-voltage (คิดแบบ PV gen ต่ำสุด)", f(uvPer), "kWh/ราย", RED, `รวม ${f(uvTot)} kWh · <code>Vmin = 0.95 p.u.</code>`)}
         ${cell("🔵", "Limits", "0.95–1.05", "p.u.", BLUE, "line loading ≤ 100%")}
       </div>
 
