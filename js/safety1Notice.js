@@ -20,90 +20,103 @@
 //   pattern liveRange.js already uses.
 // ===========================================================================
 (function () {
-    "use strict";
+  "use strict";
 
-    const POLL_MS = 400;
-    const GREEN = "#22c55e", AMBER = "#f59e0b", RED = "#ef4444", GREY = "#94a3b8";
+  const POLL_MS = 400;
+  const GREEN = "#22c55e", AMBER = "#f59e0b", RED = "#ef4444", GREY = "#94a3b8";
 
-    // app.js declares its globals with let/const, so they are NOT properties of
-    // `window` — but the bare identifier is reachable. Guarded reads only, exactly
-    // like liveRange.js does (that was the bug that once broke the live panel).
-    const G = {
-        state: () => { try { return (typeof state !== "undefined") ? state : window.state; } catch (_) { return window.state; } },
-        wf: () => { try { return (typeof wf !== "undefined") ? wf : window.wf; } catch (_) { return window.wf; } },
-        sellers: () => { try { return (typeof SELLERS !== "undefined") ? SELLERS : window.SELLERS; } catch (_) { return window.SELLERS; } },
-        locs: () => { try { return (typeof PLAYER_LOCATIONS !== "undefined") ? PLAYER_LOCATIONS : window.PLAYER_LOCATIONS; } catch (_) { return window.PLAYER_LOCATIONS; } },
+  // app.js declares its globals with let/const, so they are NOT properties of
+  // `window` — but the bare identifier is reachable. Guarded reads only, exactly
+  // like liveRange.js does (that was the bug that once broke the live panel).
+  const G = {
+    state: () => { try { return (typeof state !== "undefined") ? state : window.state; } catch (_) { return window.state; } },
+    wf: () => { try { return (typeof wf !== "undefined") ? wf : window.wf; } catch (_) { return window.wf; } },
+    sellers: () => { try { return (typeof SELLERS !== "undefined") ? SELLERS : window.SELLERS; } catch (_) { return window.SELLERS; } },
+    locs: () => { try { return (typeof PLAYER_LOCATIONS !== "undefined") ? PLAYER_LOCATIONS : window.PLAYER_LOCATIONS; } catch (_) { return window.PLAYER_LOCATIONS; } },
+  };
+  const f2 = (v) => (typeof v === "number" && isFinite(v)) ? v.toFixed(2) : "—";
+
+  function snapshot() {
+    const st = G.state(), w = G.wf(), sellers = G.sellers();
+    if (!st || !st.sellerKwh || !w || !sellers) return null;
+    const er = w.energyRange || {};
+    const cap = (typeof er.hard_per === "number" && isFinite(er.hard_per))
+      ? er.hard_per : null;
+    return {
+      cap,
+      capTotal: (typeof er.hard_total === "number") ? er.hard_total : null,
+      sellers: sellers.slice(),
+      kwh: { ...st.sellerKwh },
+      locs: G.locs() || {},
     };
-    const f2 = (v) => (typeof v === "number" && isFinite(v)) ? v.toFixed(2) : "—";
+  }
 
-    function snapshot() {
-        const st = G.state(), w = G.wf(), sellers = G.sellers();
-        if (!st || !st.sellerKwh || !w || !sellers) return null;
-        const er = w.energyRange || {};
-        const cap = (typeof er.hard_per === "number" && isFinite(er.hard_per))
-            ? er.hard_per : null;
-        return {
-            cap,
-            capTotal: (typeof er.hard_total === "number") ? er.hard_total : null,
-            sellers: sellers.slice(),
-            kwh: { ...st.sellerKwh },
-            locs: G.locs() || {},
-        };
-    }
+  function ensurePanel() {
+    let el = document.getElementById("safety1-panel");
+    if (el && el.isConnected) return el;
+    const anchor = document.getElementById("energy-range-banner");
+    if (!anchor) return null;
+    el = document.createElement("div");
+    el.id = "safety1-panel";
+    el.style.marginTop = "12px";
+    anchor.insertAdjacentElement("afterend", el);
+    return el;
+  }
 
-    function ensurePanel() {
-        let el = document.getElementById("safety1-panel");
-        if (el && el.isConnected) return el;
-        const anchor = document.getElementById("energy-range-banner");
-        if (!anchor) return null;
-        el = document.createElement("div");
-        el.id = "safety1-panel";
-        el.style.marginTop = "12px";
-        anchor.insertAdjacentElement("afterend", el);
-        return el;
-    }
-
-    function render(s) {
-        const el = ensurePanel();
-        if (!el) return;
-        if (!s || s.cap == null) {
-            el.innerHTML = `<div style="padding:14px;border-radius:12px;
+  function render(s) {
+    const el = ensurePanel();
+    if (!el) return;
+    if (!s || s.cap == null) {
+      el.innerHTML = `<div style="padding:14px;border-radius:12px;
         background:rgba(15,27,45,.6);border:1px solid rgba(255,255,255,.10);
         color:#cbd5e1;">⏳ กำลังโหลดค่าเพดาน Safety 1 จาก backend…</div>`;
-            return;
-        }
+      return;
+    }
 
-        const rows = s.sellers.map((p) => {
-            const v = parseFloat(s.kwh[p]) || 0;
-            const over = v > s.cap + 1e-9;
-            const pct = s.cap > 0 ? (v / s.cap) * 100 : 0;
-            const col = over ? RED : pct >= 90 ? AMBER : GREEN;
-            return `<tr>
+    const rows = s.sellers.map((p) => {
+      const v = parseFloat(s.kwh[p]) || 0;
+      const over = v > s.cap + 1e-9;
+      const pct = s.cap > 0 ? (v / s.cap) * 100 : 0;
+      const col = over ? RED : pct >= 90 ? AMBER : GREEN;
+      return `<tr>
         <td style="padding:5px 8px;"><b style="color:#e2e8f0;">${p}</b>
           <span style="color:${GREY};font-size:.82em;"> ${s.locs[p] || ""}</span></td>
         <td style="padding:5px 8px;text-align:right;color:${col};font-weight:700;">${f2(v)}</td>
         <td style="padding:5px 8px;text-align:right;color:${GREY};">${f2(s.cap)}</td>
         <td style="padding:5px 8px;text-align:right;color:${col};font-weight:700;">${pct.toFixed(0)}%</td>
+        <td style="padding:5px 8px;width:34%;">
+          <!-- one-glance bar: how much of the safe cap this seller has used -->
+          <div style="position:relative;height:9px;border-radius:99px;
+                      background:rgba(255,255,255,.07);overflow:hidden;">
+            <div style="position:absolute;left:0;top:0;bottom:0;border-radius:99px;
+                        width:${Math.min(pct, 100).toFixed(1)}%;background:${col};
+                        opacity:.85;transition:width .25s;"></div>
+            ${over ? `<div style="position:absolute;top:0;bottom:0;left:100%;width:3px;
+                        background:${RED};box-shadow:0 0 7px ${RED};"></div>` : ""}
+          </div>
+          ${over ? `<div style="font-size:.72em;color:${RED};margin-top:3px;">
+                     ล้นออกไป ${(pct - 100).toFixed(0)}% ของเพดาน</div>` : ""}
+        </td>
         <td style="padding:5px 8px;color:${col};font-size:.85em;">
           ${over ? `⛔ เกินเพดาน ${f2(v - s.cap)} kWh — ต้องผ่าน Safety 2`
-                    : pct >= 90 ? "⚠️ ใกล้เพดาน" : "✅ อยู่ในเกณฑ์"}</td>
+          : pct >= 90 ? "⚠️ ใกล้เพดาน" : "✅ อยู่ในเกณฑ์"}</td>
       </tr>`;
-        }).join("");
+    }).join("");
 
-        const totalIn = s.sellers.reduce((a, p) => a + (parseFloat(s.kwh[p]) || 0), 0);
-        const nOver = s.sellers.filter(p => (parseFloat(s.kwh[p]) || 0) > s.cap + 1e-9).length;
-        const banner = nOver
-            ? `<div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;
+    const totalIn = s.sellers.reduce((a, p) => a + (parseFloat(s.kwh[p]) || 0), 0);
+    const nOver = s.sellers.filter(p => (parseFloat(s.kwh[p]) || 0) > s.cap + 1e-9).length;
+    const banner = nOver
+      ? `<div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;
            background:rgba(239,68,68,.10);border-left:4px solid ${RED};color:${RED};
            font-weight:700;">
            ⛔ มีผู้ขาย ${nOver} ราย ป้อนค่าเกินเพดาน Safety 1 —
            ระบบยังยอมให้รันต่อได้ แต่จะถูกส่งต่อให้ Safety 2 ตรวจและแก้ไขอัตโนมัติ
          </div>`
-            : `<div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;
+      : `<div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;
            background:rgba(34,197,94,.08);border-left:4px solid ${GREEN};color:${GREEN};
            font-weight:700;">✅ ทุกรายอยู่ในเพดาน Safety 1</div>`;
 
-        el.innerHTML = `
+    el.innerHTML = `
       <div style="padding:16px 18px;border-radius:12px;background:rgba(15,27,45,.6);
                   border:1px solid rgba(255,255,255,.10);">
         <div style="font-weight:700;font-size:1.08em;color:#e2e8f0;margin-bottom:3px;">
@@ -124,13 +137,14 @@
             <th style="text-align:right;padding:4px 8px;">เพดาน (kWh)</th>
             <th style="text-align:right;padding:4px 8px;">ใช้ไป</th>
             <th style="text-align:left;padding:4px 8px;">สถานะ</th>
+            <th style="text-align:left;padding:4px 8px;">เทียบเพดาน</th>
           </tr></thead>
           <tbody>${rows}</tbody>
           <tfoot><tr style="border-top:1px solid rgba(255,255,255,.10);">
             <td style="padding:6px 8px;color:${GREY};">รวม</td>
             <td style="padding:6px 8px;text-align:right;font-weight:700;color:#e2e8f0;">${f2(totalIn)}</td>
             <td style="padding:6px 8px;text-align:right;color:${GREY};">${f2(s.capTotal)}</td>
-            <td colspan="2"></td>
+            <td colspan="3"></td>
           </tr></tfoot>
         </table>
 
@@ -159,19 +173,19 @@
           </ul>
         </div>
       </div>`;
-    }
+  }
 
-    // ---- watcher --------------------------------------------------------------
-    let lastKey = null;
-    setInterval(() => {
-        const s = snapshot();
-        if (!s) return;
-        const key = JSON.stringify(s);
-        const el = document.getElementById("safety1-panel");
-        if (key === lastKey && el && el.isConnected) return;
-        lastKey = key;
-        render(s);
-    }, POLL_MS);
+  // ---- watcher --------------------------------------------------------------
+  let lastKey = null;
+  setInterval(() => {
+    const s = snapshot();
+    if (!s) return;
+    const key = JSON.stringify(s);
+    const el = document.getElementById("safety1-panel");
+    if (key === lastKey && el && el.isConnected) return;
+    lastKey = key;
+    render(s);
+  }, POLL_MS);
 
-    window.safety1Refresh = () => render(snapshot());
+  window.safety1Refresh = () => render(snapshot());
 })();
