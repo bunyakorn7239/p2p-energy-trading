@@ -851,6 +851,13 @@ try:
 except Exception as _e:          # module missing -> app still runs as before
     print("energy_range_live not loaded:", _e)
 
+# --- SAFETY LAYER 2 (violation resolver; separate module) --------------------
+try:
+    from violation_handler import bp_safety2
+    app.register_blueprint(bp_safety2)
+except Exception as _e:
+    print("violation_handler not loaded:", _e)
+
 if __name__ == "__main__":
     from market import register_market_routes
     register_market_routes(app)
