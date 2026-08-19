@@ -14,96 +14,128 @@
 
 <body>
 
-  <!-- ── HEADER ────────────────────────────────────────── -->
-  <header class="app-header">
-    <a class="header-logo" href="#">
-      <div class="logo-icon">⚡</div>
-      <div>
-        <div class="logo-text">P2P Energy Trading</div>
-        <div class="logo-sub">IEEE 33-Bus · pandapower AC · Average Cost Path · v3.0</div>
+  <!-- ══════════════════════════════════════════════════════════════════════
+       LAYOUT ONLY. Every id, class and onclick below is byte-identical to the
+       previous markup, so app.js (showTab / updateNavState / renderTab) and
+       market.js (which wraps showTab) keep working untouched. What changed is
+       purely where the elements sit:
+         nav .app-nav      : was a horizontal strip  -> now inside .app-sidebar
+         #backend-badge    : was in the top header   -> now in .sidebar-foot
+         #header-clock     : was in the top header   -> now in .sidebar-foot
+         #workflow-banner  : was page-wide           -> now in .app-content
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div class="app-shell">
+
+    <!-- ── SIDEBAR ─────────────────────────────────────── -->
+    <aside class="app-sidebar">
+
+      <a class="sidebar-brand header-logo" href="#">
+        <div class="logo-icon">⚡</div>
+        <div>
+          <div class="logo-text">P2P Energy Trading</div>
+          <div class="logo-sub">IEEE 33-Bus · v3.0</div>
+        </div>
+      </a>
+
+      <div class="sidebar-scroll">
+        <div class="nav-group-label">Workspace</div>
+        <nav class="app-nav">
+          <button class="nav-btn active" id="nav-inputs" onclick="showTab('inputs')">📝 Input Data</button>
+          <button class="nav-btn nav-locked" id="nav-dashboard" onclick="showTab('dashboard')">🏠 Dashboard</button>
+          <button class="nav-btn nav-locked" id="nav-matching" onclick="showTab('matching')">
+            🔄 P2P Matching <span class="nav-badge" id="trade-count">0</span>
+          </button>
+          <button class="nav-btn nav-locked" id="nav-powerflow" onclick="showTab('powerflow')">⚡ Power Flow</button>
+          <button class="nav-btn nav-locked" id="nav-transactions" onclick="showTab('transactions')">💰
+            Transactions</button>
+          <button class="nav-btn" id="nav-market" onclick="showTab('market')">🕐 Hourly Market</button>
+          <button class="nav-btn" id="nav-log" onclick="showTab('log')">📋 Event Log</button>
+        </nav>
       </div>
-    </a>
-    <div class="header-spacer"></div>
-    <div class="header-badge" id="backend-badge">🐍 Connecting backend…</div>
-    <div class="header-time" id="header-clock"></div>
-  </header>
 
-  <!-- ── WORKFLOW BANNER ───────────────────────────────── -->
-  <div id="workflow-banner"></div>
-
-  <!-- ── NAV ──────────────────────────────────────────── -->
-  <nav class="app-nav">
-    <button class="nav-btn active" id="nav-inputs" onclick="showTab('inputs')">📝 Input Data</button>
-    <button class="nav-btn nav-locked" id="nav-dashboard" onclick="showTab('dashboard')">🏠 Dashboard</button>
-    <button class="nav-btn nav-locked" id="nav-matching" onclick="showTab('matching')">
-      🔄 P2P Matching <span class="nav-badge" id="trade-count">0</span>
-    </button>
-    <button class="nav-btn nav-locked" id="nav-powerflow" onclick="showTab('powerflow')">⚡ Power Flow</button>
-    <button class="nav-btn nav-locked" id="nav-transactions" onclick="showTab('transactions')">💰 Transactions</button>
-    <button class="nav-btn" id="nav-market" onclick="showTab('market')">🕐 Hourly Market</button>
-    <button class="nav-btn" id="nav-log" onclick="showTab('log')">📋 Event Log</button>
-  </nav>
-
-  <!-- ── MAIN ──────────────────────────────────────────── -->
-  <main class="app-main">
-
-    <!-- Input -->
-    <section class="tab-content active" id="tab-inputs">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">⏳</div>
-        <div>Initialising energy range analysis…</div>
+      <div class="sidebar-foot">
+        <div class="header-badge" id="backend-badge">🐍 Connecting backend…</div>
+        <div class="header-time" id="header-clock"></div>
       </div>
-    </section>
 
-    <!-- Dashboard -->
-    <section class="tab-content" id="tab-dashboard">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">📊</div>
-        <div>Run analysis on the Input Data tab first.</div>
-      </div>
-    </section>
+    </aside>
 
-    <!-- Matching -->
-    <section class="tab-content" id="tab-matching">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">🔄</div>
-        <div>Run analysis on the Input Data tab first.</div>
-      </div>
-    </section>
+    <!-- ── CONTENT COLUMN ──────────────────────────────── -->
+    <div class="app-content">
 
-    <!-- Power Flow -->
-    <section class="tab-content" id="tab-powerflow">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">⚡</div>
-        <div>Run analysis on the Input Data tab first.</div>
-      </div>
-    </section>
+      <header class="app-header">
+        <div>
+          <div class="header-title">Peer-to-Peer <em>Energy Trading</em></div>
+          <div class="header-sub">pandapower AC power flow · Average Cost Path matching</div>
+        </div>
+        <div class="header-spacer"></div>
+      </header>
 
-    <!-- Transactions -->
-    <section class="tab-content" id="tab-transactions">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">💰</div>
-        <div>Run analysis on the Input Data tab first.</div>
-      </div>
-    </section>
+      <!-- ── WORKFLOW BANNER ───────────────────────────── -->
+      <div id="workflow-banner"></div>
 
-    <!-- Hourly Market -->
-    <section class="tab-content" id="tab-market">
-      <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
-        <div style="font-size:36px;margin-bottom:10px">🕐</div>
-        <div>เปิดแท็บนี้เพื่อรันตลาดราย 1 ชั่วโมง (5 เฟส)</div>
-      </div>
-    </section>
+      <!-- ── MAIN ──────────────────────────────────────── -->
+      <main class="app-main">
 
-    <!-- Event Log -->
-    <section class="tab-content" id="tab-log">
-      <div class="dash-section">
-        <h3>📋 System Event Log</h3>
-        <div class="log-empty">No events yet — run analysis to begin</div>
-      </div>
-    </section>
+        <!-- Input -->
+        <section class="tab-content active" id="tab-inputs">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">⏳</div>
+            <div>Initialising energy range analysis…</div>
+          </div>
+        </section>
 
-  </main>
+        <!-- Dashboard -->
+        <section class="tab-content" id="tab-dashboard">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">📊</div>
+            <div>Run analysis on the Input Data tab first.</div>
+          </div>
+        </section>
+
+        <!-- Matching -->
+        <section class="tab-content" id="tab-matching">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">🔄</div>
+            <div>Run analysis on the Input Data tab first.</div>
+          </div>
+        </section>
+
+        <!-- Power Flow -->
+        <section class="tab-content" id="tab-powerflow">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">⚡</div>
+            <div>Run analysis on the Input Data tab first.</div>
+          </div>
+        </section>
+
+        <!-- Transactions -->
+        <section class="tab-content" id="tab-transactions">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">💰</div>
+            <div>Run analysis on the Input Data tab first.</div>
+          </div>
+        </section>
+
+        <!-- Hourly Market -->
+        <section class="tab-content" id="tab-market">
+          <div style="text-align:center;padding:60px;color:rgba(255,255,255,.3)">
+            <div style="font-size:36px;margin-bottom:10px">🕐</div>
+            <div>เปิดแท็บนี้เพื่อรันตลาดราย 1 ชั่วโมง (5 เฟส)</div>
+          </div>
+        </section>
+
+        <!-- Event Log -->
+        <section class="tab-content" id="tab-log">
+          <div class="dash-section">
+            <h3>📋 System Event Log</h3>
+            <div class="log-empty">No events yet — run analysis to begin</div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
 
   <!-- ── SCRIPTS ───────────────────────────────────────── -->
   <!-- network.js / matching.js / powerflow.js no longer needed:
