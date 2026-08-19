@@ -31,7 +31,8 @@ p2p-energy-trading/
     ├── 00_INSTALL_safety_layers.md ← ไฟล์นี้
     ├── 01_zero_export.md
     ├── 02_under_voltage.md
-    └── 03_line_overload.md
+    ├── 03_line_overload.md
+    └── 04_post_curtailment_delivery.md   ← ➕ Phase 2 (ล็อกการจับคู่ + บัญชีค่าชดเชย)
 ```
 
 **สรุป: เพิ่ม 9 ไฟล์ · แก้ของเดิมแค่ 2 ไฟล์ รวม 10 บรรทัด · ไม่ลบอะไรเลย**

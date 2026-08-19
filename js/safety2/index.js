@@ -74,6 +74,11 @@
                     buyer_energy_kwh: st.buyerKwh,
                     seller_sold_kwh: m.soldKwh || {},
                     buyer_bought_kwh: m.boughtKwh || {},
+                    // needed by PHASE 2 (re-matching the surviving participants) so the
+                    // re-run uses the prices actually on the form, not the defaults
+                    offering_price: st.offeringPrice || {},
+                    bidding_price: st.biddingPrice || {},
+                    apply_curtailment: true,   // phase 2: cancel curtailed trades, matching stays frozen
                     trades,
                 }),
             });
