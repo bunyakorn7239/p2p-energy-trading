@@ -857,10 +857,22 @@ try:
     app.register_blueprint(bp_safety2)
 except Exception as _e:
     print("violation_handler not loaded:", _e)
-
-if __name__ == "__main__":
+ 
+# --- HOURLY MARKET routes -----------------------------------------------------
+# These used to be registered inside `if __name__ == "__main__"`, which means
+# they existed only when the file was run directly (python server.py). Under a
+# WSGI server such as gunicorn the module is IMPORTED, not run, so __main__
+# never executed and every /api/market/* call fell through to the static route
+# and came back as an HTML error page — which the frontend then tried to parse
+# as JSON. Registering here fixes that for both ways of starting the app.
+try:
     from market import register_market_routes
     register_market_routes(app)
+except Exception as _e:
+    print("market routes not loaded:", _e)
+ 
+ 
+if __name__ == "__main__":
 
 
     print("=" * 60)
