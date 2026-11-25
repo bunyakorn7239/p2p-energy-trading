@@ -476,8 +476,13 @@ def settle_slot(slot_id: str) -> dict:
     bills: Dict[str, Any] = {}
 
     # คู่ตามสัญญาหลังเฟส 3 (frozen) และคู่ที่ส่งจริงหลังเฟส 4
-    contract = {f'{t["seller"]}|{t["buyer"]}': float(t["qty"])
-                for t in cl.get("frozen_trades", [])}
+    # คู่ของผู้ขายที่ถูก zero-export (เฟส 3 หรือเฟส 4) ไม่นับเป็นสัญญาที่ต้องส่ง
+    # -> ไปอยู่ใน PENDING_SETTLEMENT อย่างเดียว ไม่ถูกคิดเป็นส่วนขาดซื้อกริด ToU ซ้ำ
+    contract: Dict[str, float] = {}
+    for t in cl.get("frozen_trades", []):
+        if t["seller"] not in removed:
+            k = f'{t["seller"]}|{t["buyer"]}'
+            contract[k] = contract.get(k, 0.0) + float(t["qty"])
     delivered = {}
     for t in act.get("delivered_trades", []):
         k = f'{t["seller"]}|{t["buyer"]}'
